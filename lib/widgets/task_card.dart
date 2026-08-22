@@ -7,6 +7,7 @@ import '../screens/shipment_status_screen.dart';
 import '../screens/scanner_screen.dart';
 import '../services/phone_action_service.dart';
 import '../services/scan_api_service.dart';
+import '../services/sms_action_service.dart';
 import '../services/whatsapp_action_service.dart';
 import '../services/local_contact_controller.dart';
 import '../services/local_contact_store.dart';
@@ -42,7 +43,9 @@ class TaskCard extends StatelessWidget {
     if (!context.mounted) return;
     if (!opened) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('رقم الهاتف غير صالح أو تعذر فتح الاتصال')),
+        const SnackBar(
+          content: Text('رقم الهاتف غير صالح أو تعذر فتح الاتصال'),
+        ),
       );
       return;
     }
@@ -58,7 +61,10 @@ class TaskCard extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('نتيجة الاتصال', style: Theme.of(sheetContext).textTheme.titleLarge),
+              Text(
+                'نتيجة الاتصال',
+                style: Theme.of(sheetContext).textTheme.titleLarge,
+              ),
               const SizedBox(height: 8),
               const Text('هل أجاب العميل؟'),
               const SizedBox(height: 18),
@@ -67,7 +73,10 @@ class TaskCard extends StatelessWidget {
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () => Navigator.pop(sheetContext, 'no_answer'),
-                      child: const Text('لم يجيب', style: TextStyle(color: Colors.red)),
+                      child: const Text(
+                        'لم يجيب',
+                        style: TextStyle(color: Colors.red),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -99,8 +108,20 @@ class TaskCard extends StatelessWidget {
       return;
     }
     if (contactController != null) {
-      await contactController!.setOutcome(_storageKey, 'answered', type: 'whatsapp');
+      await contactController!.setOutcome(
+        _storageKey,
+        'answered',
+        type: 'whatsapp',
+      );
     }
+  }
+
+  Future<void> _openSms(BuildContext context) async {
+    final result = await SmsActionService.openForTask(task);
+    if (!context.mounted || result.success) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(result.message ?? 'تعذر فتح الرسائل')),
+    );
   }
 
   Future<void> _openLocation(BuildContext context) async {
@@ -115,12 +136,11 @@ class TaskCard extends StatelessWidget {
   Future<void> _copyReference(BuildContext context) async {
     await Clipboard.setData(ClipboardData(text: task.displayReference));
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم نسخ رقم الشحنة')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('تم نسخ رقم الشحنة')));
     }
   }
-
 
   Future<void> _openLocalStatusDialog(BuildContext context) async {
     final choice = await showModalBottomSheet<String>(
@@ -135,9 +155,9 @@ class TaskCard extends StatelessWidget {
             children: [
               Text(
                 'تسجيل حالة محلياً (تخزين محلي)',
-                style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                style: Theme.of(
+                  sheetContext,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 4),
@@ -166,7 +186,10 @@ class TaskCard extends StatelessWidget {
               ListTile(
                 leading: const CircleAvatar(
                   backgroundColor: Colors.purple,
-                  child: Icon(Icons.wrong_location_outlined, color: Colors.white),
+                  child: Icon(
+                    Icons.wrong_location_outlined,
+                    color: Colors.white,
+                  ),
                 ),
                 title: const Text('الموقع غير صحيح / غير دقيق'),
                 onTap: () => Navigator.pop(sheetContext, 'wrong_location'),
@@ -174,7 +197,10 @@ class TaskCard extends StatelessWidget {
               ListTile(
                 leading: const CircleAvatar(
                   backgroundColor: Colors.blueGrey,
-                  child: Icon(Icons.phone_disabled_outlined, color: Colors.white),
+                  child: Icon(
+                    Icons.phone_disabled_outlined,
+                    color: Colors.white,
+                  ),
                 ),
                 title: const Text('رقم الهاتف خاطئ'),
                 onTap: () => Navigator.pop(sheetContext, 'wrong_phone'),
@@ -194,7 +220,9 @@ class TaskCard extends StatelessWidget {
                     backgroundColor: Colors.green,
                     child: Icon(Icons.restore_rounded, color: Colors.white),
                   ),
-                  title: const Text('إلغاء الحالة المحلية واستعادة الشحنة للخريطة'),
+                  title: const Text(
+                    'إلغاء الحالة المحلية واستعادة الشحنة للخريطة',
+                  ),
                   onTap: () => Navigator.pop(sheetContext, 'clear'),
                 ),
               ],
@@ -240,8 +268,10 @@ class TaskCard extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('تحديث الحالة',
-                  style: Theme.of(sheetContext).textTheme.titleLarge),
+              Text(
+                'تحديث الحالة',
+                style: Theme.of(sheetContext).textTheme.titleLarge,
+              ),
               const SizedBox(height: 16),
               ListTile(
                 leading: const CircleAvatar(
@@ -250,10 +280,7 @@ class TaskCard extends StatelessWidget {
                 ),
                 title: const Text('تم التوصيل (رسمي)'),
                 subtitle: const Text('مسح الشحنة ثم OTP عند الحاجة'),
-                onTap: () => Navigator.pop(
-                  sheetContext,
-                  'delivered',
-                ),
+                onTap: () => Navigator.pop(sheetContext, 'delivered'),
               ),
               const Divider(),
               ListTile(
@@ -263,23 +290,22 @@ class TaskCard extends StatelessWidget {
                 ),
                 title: const Text('لم يتم التوصيل (رسمي)'),
                 subtitle: const Text('اختيار السبب وإرفاق صورة إثبات'),
-                onTap: () => Navigator.pop(
-                  sheetContext,
-                  'not_delivered',
-                ),
+                onTap: () => Navigator.pop(sheetContext, 'not_delivered'),
               ),
               const Divider(),
               ListTile(
                 leading: const CircleAvatar(
                   backgroundColor: Colors.indigo,
-                  child: Icon(Icons.bookmark_outline_rounded, color: Colors.white),
+                  child: Icon(
+                    Icons.bookmark_outline_rounded,
+                    color: Colors.white,
+                  ),
                 ),
                 title: const Text('تسجيل حالة محلياً'),
-                subtitle: const Text('تخزين محلي واستبعاد من الخريطة دون إرسال للسيرفر'),
-                onTap: () => Navigator.pop(
-                  sheetContext,
-                  'local_status',
+                subtitle: const Text(
+                  'تخزين محلي واستبعاد من الخريطة دون إرسال للسيرفر',
                 ),
+                onTap: () => Navigator.pop(sheetContext, 'local_status'),
               ),
             ],
           ),
@@ -297,10 +323,7 @@ class TaskCard extends StatelessWidget {
     if (choice == 'delivered') {
       final shipment = await Navigator.of(context).push<ScannedShipment>(
         MaterialPageRoute(
-          builder: (_) => ScannerScreen(
-            token: session,
-            verificationTask: task,
-          ),
+          builder: (_) => ScannerScreen(token: session, verificationTask: task),
         ),
       );
       if (shipment == null || !context.mounted) return;
@@ -370,8 +393,13 @@ class TaskCard extends StatelessWidget {
     );
     if (time == null) return;
 
-    final target =
-        DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    final target = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
     if (target.isBefore(DateTime.now())) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -386,8 +414,9 @@ class TaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final normalizedPhone =
-        PhoneNumberUtils.normalizeSaudiMobile(task.customerPhone);
+    final normalizedPhone = PhoneNumberUtils.normalizeSaudiMobile(
+      task.customerPhone,
+    );
     final isCod = task.paymentKind == PaymentKind.cashOnDelivery;
     final isAnswered = contactData?.status == 'answered';
     final isNoAnswer = contactData?.status == 'no_answer';
@@ -419,8 +448,8 @@ class TaskCard extends StatelessWidget {
           color: needsFollowUp
               ? Colors.red.withValues(alpha: 0.5)
               : (Theme.of(context).brightness == Brightness.dark
-                  ? Colors.white10
-                  : Colors.black.withValues(alpha: 0.05)),
+                    ? Colors.white10
+                    : Colors.black.withValues(alpha: 0.05)),
           width: needsFollowUp ? 2 : 1,
         ),
       ),
@@ -432,7 +461,10 @@ class TaskCard extends StatelessWidget {
             if (localStatus != null)
               Container(
                 margin: const EdgeInsets.only(bottom: 12),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.red.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(14),
@@ -440,7 +472,11 @@ class TaskCard extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.bookmark_remove_rounded, color: Colors.red, size: 18),
+                    const Icon(
+                      Icons.bookmark_remove_rounded,
+                      color: Colors.red,
+                      size: 18,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Column(
@@ -465,12 +501,17 @@ class TaskCard extends StatelessWidget {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.red,
                         side: const BorderSide(color: Colors.red),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 0,
+                        ),
                         minimumSize: const Size(60, 32),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       onPressed: () async {
-                        await LocalShipmentStatusStore.instance.removeStatus(_storageKey);
+                        await LocalShipmentStatusStore.instance.removeStatus(
+                          _storageKey,
+                        );
                         if (onLocalStatusChanged != null) {
                           await onLocalStatusChanged!();
                         } else if (onUpdated != null) {
@@ -478,7 +519,10 @@ class TaskCard extends StatelessWidget {
                         }
                       },
                       icon: const Icon(Icons.restore_rounded, size: 14),
-                      label: const Text('استعادة', style: TextStyle(fontSize: 11)),
+                      label: const Text(
+                        'استعادة',
+                        style: TextStyle(fontSize: 11),
+                      ),
                     ),
                   ],
                 ),
@@ -499,23 +543,28 @@ class TaskCard extends StatelessWidget {
                     Text(
                       isNoAnswer ? 'العميل لم يجيب' : 'العميل أجاب',
                       style: TextStyle(
-                          fontSize: 11,
-                          color: isNoAnswer ? Colors.red : Colors.green,
-                          fontWeight: FontWeight.bold),
+                        fontSize: 11,
+                        color: isNoAnswer ? Colors.red : Colors.green,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     if (contactData?.timestamp != null) ...[
                       const SizedBox(width: 8),
                       Text(
                         '(${TimeOfDay.fromDateTime(contactData!.timestamp!).format(context)})',
-                        style:
-                            const TextStyle(fontSize: 10, color: Colors.grey),
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: Colors.grey,
+                        ),
                       ),
                     ],
                     const Spacer(),
                     if (reminderText != null)
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: needsFollowUp
                               ? Colors.red.withValues(alpha: 0.1)
@@ -542,8 +591,10 @@ class TaskCard extends StatelessWidget {
                     color: Colors.green.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: const Icon(Icons.inventory_2_rounded,
-                      color: Colors.green),
+                  child: const Icon(
+                    Icons.inventory_2_rounded,
+                    color: Colors.green,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -571,10 +622,7 @@ class TaskCard extends StatelessWidget {
                       ),
                       Text(
                         task.displayStoreName,
-                        style: TextStyle(
-                          color: Colors.grey[600],
-                          fontSize: 13,
-                        ),
+                        style: TextStyle(color: Colors.grey[600], fontSize: 13),
                       ),
                     ],
                   ),
@@ -585,42 +633,56 @@ class TaskCard extends StatelessWidget {
             const SizedBox(height: 20),
             if (task.customerName.isNotEmpty)
               _ModernInfoRow(
-                  icon: Icons.person_rounded, text: task.customerName),
+                icon: Icons.person_rounded,
+                text: task.customerName,
+              ),
             if (task.customerPhone.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: _ModernInfoRow(
-                    icon: Icons.phone_rounded, text: task.customerPhone),
+                  icon: Icons.phone_rounded,
+                  text: task.customerPhone,
+                ),
               ),
             if (task.address.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: _ModernInfoRow(
-                    icon: Icons.location_on_rounded, text: task.address),
+                  icon: Icons.location_on_rounded,
+                  text: task.address,
+                ),
               ),
             if (isCod && task.codAmount != null)
               Container(
                 margin: const EdgeInsets.only(top: 16),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.orange.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.payments_rounded,
-                        color: Colors.orange, size: 20),
+                    const Icon(
+                      Icons.payments_rounded,
+                      color: Colors.orange,
+                      size: 20,
+                    ),
                     const SizedBox(width: 8),
-                    const Text('المطلوب تحصيله:',
-                        style: TextStyle(fontSize: 13)),
+                    const Text(
+                      'المطلوب تحصيله:',
+                      style: TextStyle(fontSize: 13),
+                    ),
                     const Spacer(),
                     Text(
                       '${task.codAmount!.toStringAsFixed(2)} ر.س',
                       style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                          color: Colors.orange),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: Colors.orange,
+                      ),
                     ),
                   ],
                 ),
@@ -644,8 +706,9 @@ class TaskCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 IconButton.filledTonal(
-                  onPressed:
-                      normalizedPhone == null ? null : () => _call(context),
+                  onPressed: normalizedPhone == null
+                      ? null
+                      : () => _call(context),
                   icon: const Icon(Icons.call_rounded),
                   tooltip: 'اتصال',
                 ),
@@ -658,23 +721,54 @@ class TaskCard extends StatelessWidget {
                   icon: const Icon(Icons.chat_rounded, color: Colors.green),
                   tooltip: 'واتساب',
                 ),
-                IconButton.filledTonal(
-                  onPressed: () => _openLocalStatusDialog(context),
-                  icon: const Icon(Icons.bookmark_add_outlined),
-                  tooltip: 'تسجيل حالة محلياً',
+                PopupMenuButton<String>(
+                  tooltip: 'إجراءات إضافية',
+                  icon: const Icon(Icons.more_horiz_rounded),
+                  onSelected: (value) async {
+                    if (value == 'sms') await _openSms(context);
+                    if (value == 'local_status' && context.mounted) {
+                      await _openLocalStatusDialog(context);
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'sms',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.sms_outlined),
+                        title: Text('إرسال رسالة SMS'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'local_status',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.bookmark_add_outlined),
+                        title: Text('تسجيل حالة محلياً'),
+                      ),
+                    ),
+                  ],
                 ),
                 if (isContacted)
                   PopupMenuButton<String>(
-                    icon: const Icon(Icons.history_toggle_off_rounded,
-                        color: Colors.blue),
+                    icon: const Icon(
+                      Icons.history_toggle_off_rounded,
+                      color: Colors.blue,
+                    ),
                     onSelected: (val) {
                       if (val == '30m') {
                         contactController?.setReminder(
-                            _storageKey, const Duration(minutes: 30));
+                          _storageKey,
+                          const Duration(minutes: 30),
+                        );
                       }
                       if (val == '1h') {
                         contactController?.setReminder(
-                            _storageKey, const Duration(hours: 1));
+                          _storageKey,
+                          const Duration(hours: 1),
+                        );
                       }
                       if (val == 'custom') _pickCustomReminder(context);
                       if (val == 'cancel') {
@@ -686,19 +780,29 @@ class TaskCard extends StatelessWidget {
                     },
                     itemBuilder: (_) => [
                       const PopupMenuItem(
-                          value: '30m', child: Text('تذكير بعد 30 دقيقة')),
+                        value: '30m',
+                        child: Text('تذكير بعد 30 دقيقة'),
+                      ),
                       const PopupMenuItem(
-                          value: '1h', child: Text('تذكير بعد ساعة')),
+                        value: '1h',
+                        child: Text('تذكير بعد ساعة'),
+                      ),
                       const PopupMenuItem(
-                          value: 'custom', child: Text('تحديد وقت مخصص')),
+                        value: 'custom',
+                        child: Text('تحديد وقت مخصص'),
+                      ),
                       if (hasReminder)
                         const PopupMenuItem(
-                            value: 'cancel', child: Text('إلغاء التذكير')),
+                          value: 'cancel',
+                          child: Text('إلغاء التذكير'),
+                        ),
                       const PopupMenuDivider(),
                       const PopupMenuItem(
                         value: 'reset',
-                        child: Text('إعادة إلى "لم يتم التواصل"',
-                            style: TextStyle(color: Colors.red, fontSize: 13)),
+                        child: Text(
+                          'إعادة إلى "لم يتم التواصل"',
+                          style: TextStyle(color: Colors.red, fontSize: 13),
+                        ),
                       ),
                     ],
                   ),

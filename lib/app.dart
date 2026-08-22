@@ -10,8 +10,9 @@ class SlsAssistantApp extends StatelessWidget {
 
   ThemeData _theme(Brightness brightness) {
     final isDark = brightness == Brightness.dark;
-    final primaryColor =
-        isDark ? const Color(0xFF00C853) : const Color(0xFF2E7D32);
+    final primaryColor = isDark
+        ? const Color(0xFF00C853)
+        : const Color(0xFF2E7D32);
 
     final scheme = ColorScheme.fromSeed(
       seedColor: primaryColor,
@@ -25,12 +26,14 @@ class SlsAssistantApp extends StatelessWidget {
       useMaterial3: true,
       brightness: brightness,
       colorScheme: scheme,
-      scaffoldBackgroundColor:
-          isDark ? const Color(0xFF000000) : const Color(0xFFF8F9FA),
+      scaffoldBackgroundColor: isDark
+          ? const Color(0xFF000000)
+          : const Color(0xFFF8F9FA),
       appBarTheme: AppBarThemeData(
         centerTitle: true,
-        backgroundColor:
-            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        backgroundColor: isDark
+            ? const Color(0xFF000000)
+            : const Color(0xFFFFFFFF),
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         titleTextStyle: TextStyle(
@@ -70,8 +73,9 @@ class SlsAssistantApp extends StatelessWidget {
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor:
-            isDark ? const Color(0xFF000000) : const Color(0xFFFFFFFF),
+        backgroundColor: isDark
+            ? const Color(0xFF000000)
+            : const Color(0xFFFFFFFF),
         indicatorColor: primaryColor.withValues(alpha: 0.2),
         iconTheme: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
@@ -96,8 +100,9 @@ class SlsAssistantApp extends StatelessWidget {
           backgroundColor: primaryColor,
           foregroundColor: Colors.white,
           minimumSize: const Size(double.infinity, 56),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           elevation: 0,
         ),
       ),
@@ -111,7 +116,7 @@ class SlsAssistantApp extends StatelessWidget {
       builder: (context, _) {
         return MaterialApp(
           debugShowCheckedModeBanner: false,
-          title: 'SLS Assistant Pro',
+          title: 'SLS Driver Next',
           theme: _theme(Brightness.light),
           darkTheme: _theme(Brightness.dark),
           themeMode: ThemeController.instance.mode,
@@ -153,9 +158,7 @@ class _SessionGateState extends State<SessionGate> {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Directionality(
             textDirection: TextDirection.rtl,
-            child: Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            ),
+            child: Scaffold(body: Center(child: CircularProgressIndicator())),
           );
         }
 

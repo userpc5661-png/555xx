@@ -3,8 +3,50 @@ import 'package:flutter/material.dart';
 import '../models/task_item.dart';
 import '../services/location_correction_service.dart';
 
+Future<bool> _confirmLocation(
+  BuildContext context,
+  CorrectedLocation location,
+) async {
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('تأكيد الموقع الجديد'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('تم استخراج الإحداثيات التالية:'),
+          const SizedBox(height: 12),
+          SelectableText(
+            '${location.latitude.toStringAsFixed(7)}, ${location.longitude.toStringAsFixed(7)}',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'سيُحفظ الموقع على هذا الجهاز فقط ولن تتغير بيانات SLS.',
+            style: TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('مراجعة'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('تأكيد وحفظ'),
+        ),
+      ],
+    ),
+  );
+  return result ?? false;
+}
+
 Future<bool> showLocationCorrectionDialog(
-    BuildContext context, TaskItem task) async {
+  BuildContext context,
+  TaskItem task,
+) async {
   final controller = TextEditingController();
   var loading = false;
   final existing = await LocationCorrectionService.load(task);
@@ -30,14 +72,16 @@ Future<bool> showLocationCorrectionDialog(
             ),
             if (loading)
               const Padding(
-                  padding: EdgeInsets.only(top: 16),
-                  child: CircularProgressIndicator()),
+                padding: EdgeInsets.only(top: 16),
+                child: CircularProgressIndicator(),
+              ),
           ],
         ),
         actions: [
           TextButton(
-              onPressed: loading ? null : () => Navigator.pop(context, false),
-              child: const Text('إلغاء')),
+            onPressed: loading ? null : () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
           if (existing != null)
             TextButton(
               onPressed: loading
@@ -53,17 +97,28 @@ Future<bool> showLocationCorrectionDialog(
                 ? null
                 : () async {
                     setState(() => loading = true);
-                    final value =
-                        await LocationCorrectionService.parse(controller.text);
+                    final value = await LocationCorrectionService.parse(
+                      controller.text,
+                    );
                     if (!context.mounted) return;
                     if (value == null) {
                       setState(() => loading = false);
                       ScaffoldMessenger.of(dialogContext).showSnackBar(
-                          const SnackBar(
-                              content: Text(
-                                  'تعذر استخراج الإحداثيات من الرابط، أدخل خط العرض وخط الطول يدويًا')));
+                        const SnackBar(
+                          content: Text(
+                            'تعذر استخراج الإحداثيات من الرابط، أدخل خط العرض وخط الطول يدويًا',
+                          ),
+                        ),
+                      );
                       return;
                     }
+                    setState(() => loading = false);
+                    final confirmed = await _confirmLocation(
+                      dialogContext,
+                      value,
+                    );
+                    if (!confirmed || !dialogContext.mounted) return;
+                    setState(() => loading = true);
                     await LocationCorrectionService.save(task, value);
                     if (context.mounted) Navigator.pop(context, true);
                   },

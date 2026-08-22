@@ -118,11 +118,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 24),
                       Text(
-                        'SLS Assistant Pro',
+                        'SLS Driver Next',
                         textAlign: TextAlign.center,
-                        style: Theme.of(context)
-                            .textTheme
-                            .headlineMedium
+                        style: Theme.of(context).textTheme.headlineMedium
                             ?.copyWith(
                               fontWeight: FontWeight.bold,
                               letterSpacing: 1,
@@ -142,7 +140,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 48),
                       if (_savedAccounts.isNotEmpty) ...[
                         DropdownButtonFormField<String>(
-                          value: _savedAccounts.any((a) => a.email == _email.text)
+                          value:
+                              _savedAccounts.any((a) => a.email == _email.text)
                               ? _email.text
                               : null,
                           decoration: const InputDecoration(
@@ -150,14 +149,20 @@ class _LoginScreenState extends State<LoginScreen> {
                             prefixIcon: Icon(Icons.manage_accounts_outlined),
                           ),
                           items: _savedAccounts
-                              .map((a) => DropdownMenuItem(
-                                    value: a.email,
-                                    child: Text(a.email),
-                                  ))
+                              .map(
+                                (a) => DropdownMenuItem(
+                                  value: a.email,
+                                  child: Text(a.email),
+                                ),
+                              )
                               .toList(),
                           onChanged: (value) {
                             if (value == null) return;
-                            _selectAccount(_savedAccounts.firstWhere((a) => a.email == value));
+                            _selectAccount(
+                              _savedAccounts.firstWhere(
+                                (a) => a.email == value,
+                              ),
+                            );
                           },
                         ),
                         const SizedBox(height: 16),
@@ -199,9 +204,12 @@ class _LoginScreenState extends State<LoginScreen> {
                       CheckboxListTile(
                         contentPadding: EdgeInsets.zero,
                         value: _remember,
-                        onChanged: (value) => setState(() => _remember = value ?? true),
+                        onChanged: (value) =>
+                            setState(() => _remember = value ?? true),
                         title: const Text('حفظ بيانات الدخول'),
-                        subtitle: const Text('تظل محفوظة بعد تسجيل الخروج وإغلاق التطبيق'),
+                        subtitle: const Text(
+                          'تظل محفوظة بعد تسجيل الخروج وإغلاق التطبيق',
+                        ),
                         controlAffinity: ListTileControlAffinity.leading,
                       ),
                       const SizedBox(height: 12),
@@ -226,7 +234,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 24),
                       Text(
-                        'SLS Assistant Pro - V1.9.15',
+                        'SLS Driver Next - V1.10.0',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 11,

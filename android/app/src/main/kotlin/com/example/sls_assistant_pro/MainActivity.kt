@@ -1,5 +1,7 @@
-package com.example.sls_assistant_pro
+package com.userpc5661.slsdrivernext
 
+import android.content.Intent
+import android.net.Uri
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -53,6 +55,32 @@ class MainActivity : FlutterActivity() {
                     startPurchase(amount, reference)
                 }
                 else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "sls_assistant_pro/sms"
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "compose") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            val recipient = call.argument<String>("recipient")?.trim().orEmpty()
+            val body = call.argument<String>("body").orEmpty()
+            if (recipient.isEmpty()) {
+                result.error("invalid_recipient", "رقم العميل غير صالح.", null)
+                return@setMethodCallHandler
+            }
+            try {
+                val intent = Intent(Intent.ACTION_SENDTO).apply {
+                    data = Uri.parse("smsto:${Uri.encode(recipient)}")
+                    putExtra("sms_body", body)
+                }
+                startActivity(intent)
+                result.success(true)
+            } catch (_: Throwable) {
+                result.success(false)
             }
         }
     }

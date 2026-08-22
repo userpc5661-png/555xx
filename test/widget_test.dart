@@ -9,6 +9,6 @@ void main() {
     await tester.pumpWidget(const SlsAssistantApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('SLS Assistant Pro'), findsOneWidget);
+    expect(find.text('SLS Driver Next'), findsOneWidget);
   });
 }

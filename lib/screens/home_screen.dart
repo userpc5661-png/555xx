@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:maplibre/maplibre.dart' as ml;
 import '../models/task_item.dart';
 import '../services/api_service.dart';
 import '../services/navigation_service.dart';
@@ -51,9 +52,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _contactController = LocalContactController(onUpdate: () {
-      if (mounted) setState(() {});
-    });
+    _contactController = LocalContactController(
+      onUpdate: () {
+        if (mounted) setState(() {});
+      },
+    );
     _loadTasks();
   }
 
@@ -77,8 +80,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final tasks = await _api.fetchTasks(widget.token);
       if (!mounted) return;
 
-      final activeKeys =
-          tasks.map((t) => '${t.referenceNumber}_${t.id}').toList();
+      final activeKeys = tasks
+          .map((t) => '${t.referenceNumber}_${t.id}')
+          .toList();
       final deliveredKeys = tasks
           .where((t) => t.progress == TaskProgress.completed)
           .map((t) => '${t.referenceNumber}_${t.id}')
@@ -109,9 +113,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _error = error;
       });
       if (hasExistingData) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.toString())),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
       }
     } finally {
       if (mounted) {
@@ -130,11 +134,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openSettings() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SettingsScreen(tasks: _tasks),
-      ),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => SettingsScreen(tasks: _tasks)));
   }
 
   Future<void> _logout() async {
@@ -152,7 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
       'الرئيسية',
       'قائمة المهام',
       'خريطة الشحنات',
-      'الماسح الضوئي'
+      'الماسح الضوئي',
     ];
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -262,11 +264,12 @@ class _HomeScreenState extends State<HomeScreen> {
               contactController: _contactController,
             ),
             _MapPage(
-                tasks: _tasks,
-                active: _index == 2,
-                savedSession: widget.token,
-                onUpdated: _loadTasks,
-                contactController: _contactController),
+              tasks: _tasks,
+              active: _index == 2,
+              savedSession: widget.token,
+              onUpdated: _loadTasks,
+              contactController: _contactController,
+            ),
             _ScannerTab(token: widget.token, onChanged: _handleScanCompleted),
           ],
         ),
@@ -319,15 +322,25 @@ class _DashboardPageState extends State<_DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final remaining =
-        widget.tasks.where((task) => task.progress == TaskProgress.remaining).length;
-    final serverCompleted =
-        widget.tasks.where((task) => task.progress == TaskProgress.completed).length;
-    final currentAwbs = widget.tasks.map((task) => task.displayReference).toSet();
-    final localCompleted = _history.where((record) => !currentAwbs.contains(record.awb)).length;
+    final remaining = widget.tasks
+        .where((task) => task.progress == TaskProgress.remaining)
+        .length;
+    final serverCompleted = widget.tasks
+        .where((task) => task.progress == TaskProgress.completed)
+        .length;
+    final currentAwbs = widget.tasks
+        .map((task) => task.displayReference)
+        .toSet();
+    final localCompleted = _history
+        .where((record) => !currentAwbs.contains(record.awb))
+        .length;
     final completed = serverCompleted + localCompleted;
-    final cash = widget.tasks.where((t) => t.paymentKind == PaymentKind.cashOnDelivery).length;
-    final prepaid = widget.tasks.where((t) => t.paymentKind == PaymentKind.prepaid).length;
+    final cash = widget.tasks
+        .where((t) => t.paymentKind == PaymentKind.cashOnDelivery)
+        .length;
+    final prepaid = widget.tasks
+        .where((t) => t.paymentKind == PaymentKind.prepaid)
+        .length;
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -335,7 +348,10 @@ class _DashboardPageState extends State<_DashboardPage> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         children: [
-          _WelcomeCard(total: widget.tasks.length + localCompleted, remaining: remaining),
+          _WelcomeCard(
+            total: widget.tasks.length + localCompleted,
+            remaining: remaining,
+          ),
           const SizedBox(height: 24),
 
           // القسم السريع للعمليات المهمة
@@ -347,8 +363,8 @@ class _DashboardPageState extends State<_DashboardPage> {
                   icon: Icons.qr_code_scanner_rounded,
                   onTap: () {
                     // الانتقال لتبويب المسح
-                    final state =
-                        context.findAncestorStateOfType<_HomeScreenState>();
+                    final state = context
+                        .findAncestorStateOfType<_HomeScreenState>();
                     state?._setIndex(3);
                   },
                 ),
@@ -360,8 +376,8 @@ class _DashboardPageState extends State<_DashboardPage> {
                   icon: Icons.map_rounded,
                   onTap: () {
                     // الانتقال لتبويب الخريطة
-                    final state =
-                        context.findAncestorStateOfType<_HomeScreenState>();
+                    final state = context
+                        .findAncestorStateOfType<_HomeScreenState>();
                     state?._setIndex(2);
                   },
                 ),
@@ -373,9 +389,9 @@ class _DashboardPageState extends State<_DashboardPage> {
           Text(
             'حالة العمل اليوم',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
-                ),
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
           ),
           const SizedBox(height: 12),
 
@@ -571,8 +587,10 @@ class _WelcomeCard extends StatelessWidget {
                 if (remaining > 0)
                   Container(
                     margin: const EdgeInsets.only(top: 8),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(20),
@@ -629,22 +647,28 @@ class _MetricCard extends StatelessWidget {
           const Spacer(),
           Text(
             value,
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w900,
-            ),
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
           ),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 12,
-              color: Colors.grey,
-            ),
-          ),
+          Text(title, style: const TextStyle(fontSize: 12, color: Colors.grey)),
         ],
       ),
     );
   }
+}
+
+enum _ContactTaskFilter { all, notContacted, answered, noAnswer }
+
+enum _PaymentTaskFilter { all, cash, prepaid }
+
+enum _LocalTaskFilter {
+  active,
+  all,
+  anyLocal,
+  customerCancelled,
+  rescheduled,
+  wrongLocation,
+  wrongPhone,
+  noAnswer,
 }
 
 class _TasksPage extends StatefulWidget {
@@ -669,6 +693,9 @@ class _TasksPageState extends State<_TasksPage> {
   String _query = '';
   Map<String, LocalContactData> _contactData = {};
   Map<String, LocalShipmentStatus> _localStatuses = {};
+  _ContactTaskFilter _contactFilter = _ContactTaskFilter.all;
+  _PaymentTaskFilter _paymentFilter = _PaymentTaskFilter.all;
+  _LocalTaskFilter _localFilter = _LocalTaskFilter.active;
 
   @override
   void initState() {
@@ -699,30 +726,280 @@ class _TasksPageState extends State<_TasksPage> {
     }
   }
 
+  String _taskKey(TaskItem task) => '${task.referenceNumber}_${task.id}';
+
+  bool _matchesContact(TaskItem task) {
+    final status = _contactData[_taskKey(task)]?.status ?? 'not_contacted';
+    return switch (_contactFilter) {
+      _ContactTaskFilter.all => true,
+      _ContactTaskFilter.notContacted => status == 'not_contacted',
+      _ContactTaskFilter.answered => status == 'answered',
+      _ContactTaskFilter.noAnswer => status == 'no_answer',
+    };
+  }
+
+  bool _matchesPayment(TaskItem task) => switch (_paymentFilter) {
+    _PaymentTaskFilter.all => true,
+    _PaymentTaskFilter.cash => task.paymentKind == PaymentKind.cashOnDelivery,
+    _PaymentTaskFilter.prepaid => task.paymentKind == PaymentKind.prepaid,
+  };
+
+  bool _matchesLocalStatus(TaskItem task) {
+    final local = _localStatuses[_taskKey(task)];
+    return switch (_localFilter) {
+      _LocalTaskFilter.active => local == null,
+      _LocalTaskFilter.all => true,
+      _LocalTaskFilter.anyLocal => local != null,
+      _LocalTaskFilter.customerCancelled =>
+        local?.statusKey == 'customer_cancelled',
+      _LocalTaskFilter.rescheduled => local?.statusKey == 'rescheduled',
+      _LocalTaskFilter.wrongLocation => local?.statusKey == 'wrong_location',
+      _LocalTaskFilter.wrongPhone => local?.statusKey == 'wrong_phone',
+      _LocalTaskFilter.noAnswer => local?.statusKey == 'no_answer',
+    };
+  }
+
+  int get _activeFilterCount =>
+      (_contactFilter == _ContactTaskFilter.all ? 0 : 1) +
+      (_paymentFilter == _PaymentTaskFilter.all ? 0 : 1) +
+      (_localFilter == _LocalTaskFilter.active ? 0 : 1);
+
+  Future<void> _showFilters() async {
+    var contact = _contactFilter;
+    var payment = _paymentFilter;
+    var local = _localFilter;
+    final result =
+        await showModalBottomSheet<
+          (_ContactTaskFilter, _PaymentTaskFilter, _LocalTaskFilter)
+        >(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (sheetContext) => StatefulBuilder(
+            builder: (context, setSheetState) => SafeArea(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'تصفية المهام',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 18),
+                    const Text(
+                      'حالة التواصل',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('الكل'),
+                          selected: contact == _ContactTaskFilter.all,
+                          onSelected: (_) => setSheetState(
+                            () => contact = _ContactTaskFilter.all,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('لم يتم التواصل'),
+                          selected: contact == _ContactTaskFilter.notContacted,
+                          onSelected: (_) => setSheetState(
+                            () => contact = _ContactTaskFilter.notContacted,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('أجاب العميل'),
+                          selected: contact == _ContactTaskFilter.answered,
+                          onSelected: (_) => setSheetState(
+                            () => contact = _ContactTaskFilter.answered,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('لم يجب'),
+                          selected: contact == _ContactTaskFilter.noAnswer,
+                          onSelected: (_) => setSheetState(
+                            () => contact = _ContactTaskFilter.noAnswer,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    const Text(
+                      'طريقة الدفع',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('الكل'),
+                          selected: payment == _PaymentTaskFilter.all,
+                          onSelected: (_) => setSheetState(
+                            () => payment = _PaymentTaskFilter.all,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('كاش'),
+                          selected: payment == _PaymentTaskFilter.cash,
+                          onSelected: (_) => setSheetState(
+                            () => payment = _PaymentTaskFilter.cash,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('مدفوع'),
+                          selected: payment == _PaymentTaskFilter.prepaid,
+                          onSelected: (_) => setSheetState(
+                            () => payment = _PaymentTaskFilter.prepaid,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    const Text(
+                      'الحالة المحلية',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('النشطة'),
+                          selected: local == _LocalTaskFilter.active,
+                          onSelected: (_) => setSheetState(
+                            () => local = _LocalTaskFilter.active,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('الكل'),
+                          selected: local == _LocalTaskFilter.all,
+                          onSelected: (_) =>
+                              setSheetState(() => local = _LocalTaskFilter.all),
+                        ),
+                        ChoiceChip(
+                          label: const Text('كل الحالات المحلية'),
+                          selected: local == _LocalTaskFilter.anyLocal,
+                          onSelected: (_) => setSheetState(
+                            () => local = _LocalTaskFilter.anyLocal,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('ألغى الطلبية'),
+                          selected: local == _LocalTaskFilter.customerCancelled,
+                          onSelected: (_) => setSheetState(
+                            () => local = _LocalTaskFilter.customerCancelled,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('إعادة الجدولة'),
+                          selected: local == _LocalTaskFilter.rescheduled,
+                          onSelected: (_) => setSheetState(
+                            () => local = _LocalTaskFilter.rescheduled,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('الموقع غير صحيح'),
+                          selected: local == _LocalTaskFilter.wrongLocation,
+                          onSelected: (_) => setSheetState(
+                            () => local = _LocalTaskFilter.wrongLocation,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('رقم خاطئ'),
+                          selected: local == _LocalTaskFilter.wrongPhone,
+                          onSelected: (_) => setSheetState(
+                            () => local = _LocalTaskFilter.wrongPhone,
+                          ),
+                        ),
+                        ChoiceChip(
+                          label: const Text('لم يجب'),
+                          selected: local == _LocalTaskFilter.noAnswer,
+                          onSelected: (_) => setSheetState(
+                            () => local = _LocalTaskFilter.noAnswer,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              contact = _ContactTaskFilter.all;
+                              payment = _PaymentTaskFilter.all;
+                              local = _LocalTaskFilter.active;
+                              setSheetState(() {});
+                            },
+                            child: const Text('إعادة الافتراضي'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () => Navigator.pop(sheetContext, (
+                              contact,
+                              payment,
+                              local,
+                            )),
+                            child: const Text('عرض النتائج'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+    if (result == null || !mounted) return;
+    setState(() {
+      _contactFilter = result.$1;
+      _paymentFilter = result.$2;
+      _localFilter = result.$3;
+    });
+  }
+
+  TaskCard _taskCard(TaskItem task) {
+    final key = _taskKey(task);
+    return TaskCard(
+      task: task,
+      savedSession: widget.savedSession,
+      onUpdated: () async {
+        await widget.onRefresh();
+        await _loadLocalData();
+      },
+      contactController: widget.contactController,
+      contactData: _contactData[key],
+      localStatus: _localStatuses[key],
+      onLocalStatusChanged: () async {
+        await _loadLocalData();
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final items = widget.tasks.where((task) {
-      final searchable = '${task.referenceNumber} ${task.id} '
-              '${task.storeName} ${task.customerName} ${task.customerPhone} ${task.address}'
-          .toLowerCase();
-      return _query.isEmpty || searchable.contains(_query);
+      final searchable =
+          '${task.referenceNumber} ${task.id} '
+                  '${task.storeName} ${task.customerName} ${task.customerPhone} ${task.address}'
+              .toLowerCase();
+      final matchesSearch = _query.isEmpty || searchable.contains(_query);
+      return matchesSearch &&
+          _matchesContact(task) &&
+          _matchesPayment(task) &&
+          _matchesLocalStatus(task);
     }).toList();
-
-    final notContacted = <TaskItem>[];
-    final answered = <TaskItem>[];
-    final noAnswer = <TaskItem>[];
-
-    for (final item in items) {
-      final key = '${item.referenceNumber}_${item.id}';
-      final data = _contactData[key];
-      if (data?.status == 'answered') {
-        answered.add(item);
-      } else if (data?.status == 'no_answer') {
-        noAnswer.add(item);
-      } else {
-        notContacted.add(item);
-      }
-    }
 
     return Column(
       children: [
@@ -749,10 +1026,20 @@ class _TasksPageState extends State<_TasksPage> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: Text('النتائج: ${items.length}'),
+          padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+          child: Row(
+            children: [
+              Expanded(child: Text('النتائج: ${items.length}')),
+              FilledButton.tonalIcon(
+                onPressed: _showFilters,
+                icon: Badge(
+                  isLabelVisible: _activeFilterCount > 0,
+                  label: Text('$_activeFilterCount'),
+                  child: const Icon(Icons.tune_rounded),
+                ),
+                label: const Text('تصفية'),
+              ),
+            ],
           ),
         ),
         Expanded(
@@ -761,133 +1048,29 @@ class _TasksPageState extends State<_TasksPage> {
               await widget.onRefresh();
               await _loadLocalData();
             },
-            child: CustomScrollView(
+            child: items.isEmpty
+                ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
-                    slivers: [
-                      SliverToBoxAdapter(
-                        child: _ContactSectionHeader(
-                          title: 'لم يتم التواصل',
-                          color: Colors.grey,
-                          tasks: notContacted,
-                        ),
+                    children: const [
+                      SizedBox(height: 120),
+                      Icon(
+                        Icons.filter_alt_off_outlined,
+                        size: 52,
+                        color: Colors.grey,
                       ),
-                      if (notContacted.isNotEmpty)
-                        SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final task = notContacted[index];
-                              final key = '${task.referenceNumber}_${task.id}';
-                              return TaskCard(
-                                task: task,
-                                savedSession: widget.savedSession,
-                                onUpdated: () async {
-                                  await widget.onRefresh();
-                                  await _loadLocalData();
-                                },
-                                contactController: widget.contactController,
-                                contactData: _contactData[key],
-                                localStatus: _localStatuses[key],
-                                onLocalStatusChanged: () async {
-                                  await widget.onRefresh();
-                                  await _loadLocalData();
-                                },
-                              );
-                            },
-                            childCount: notContacted.length,
-                          ),
-                        ),
-                      SliverToBoxAdapter(
-                          child: _ContactSectionHeader(
-                            title: 'العميل أجاب',
-                            color: Colors.green,
-                            tasks: answered,
-                          ),
-                        ),
-                      if (answered.isNotEmpty)
-                        SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final task = answered[index];
-                              final key = '${task.referenceNumber}_${task.id}';
-                              return TaskCard(
-                                task: task,
-                                savedSession: widget.savedSession,
-                                onUpdated: () async {
-                                  await widget.onRefresh();
-                                  await _loadLocalData();
-                                },
-                                contactController: widget.contactController,
-                                contactData: _contactData[key],
-                                localStatus: _localStatuses[key],
-                                onLocalStatusChanged: () async {
-                                  await widget.onRefresh();
-                                  await _loadLocalData();
-                                },
-                              );
-                            },
-                            childCount: answered.length,
-                          ),
-                        ),
-                      SliverToBoxAdapter(
-                          child: _ContactSectionHeader(
-                            title: 'العميل لم يجيب',
-                            color: Colors.red,
-                            tasks: noAnswer,
-                          ),
-                        ),
-                      if (noAnswer.isNotEmpty)
-                        SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final task = noAnswer[index];
-                              final key = '${task.referenceNumber}_${task.id}';
-                              return TaskCard(
-                                task: task,
-                                savedSession: widget.savedSession,
-                                onUpdated: () async {
-                                  await widget.onRefresh();
-                                  await _loadLocalData();
-                                },
-                                contactController: widget.contactController,
-                                contactData: _contactData[key],
-                                localStatus: _localStatuses[key],
-                                onLocalStatusChanged: () async {
-                                  await widget.onRefresh();
-                                  await _loadLocalData();
-                                },
-                              );
-                            },
-                            childCount: noAnswer.length,
-                          ),
-                        ),
-                      const SliverPadding(padding: EdgeInsets.only(bottom: 24)),
+                      SizedBox(height: 12),
+                      Center(child: Text('لا توجد مهام تطابق هذه الفلاتر')),
                     ],
+                  )
+                : ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 24),
+                    itemCount: items.length,
+                    itemBuilder: (context, index) => _taskCard(items[index]),
                   ),
           ),
         ),
       ],
-    );
-  }
-}
-
-class _ContactSectionHeader extends StatelessWidget {
-  final String title;
-  final Color color;
-  final List<TaskItem> tasks;
-  const _ContactSectionHeader({required this.title, required this.color, required this.tasks});
-
-  @override
-  Widget build(BuildContext context) {
-    final cash = tasks.where((t) => t.paymentKind == PaymentKind.cashOnDelivery).length;
-    final prepaid = tasks.where((t) => t.paymentKind == PaymentKind.prepaid).length;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
-      child: Row(children: [
-        Icon(Icons.circle, size: 11, color: color),
-        const SizedBox(width: 8),
-        Expanded(child: Text('$title (${tasks.length})', style: TextStyle(fontWeight: FontWeight.bold, color: color))),
-        Text('كاش $cash  •  مدفوع $prepaid', style: const TextStyle(fontSize: 12, color: Colors.grey)),
-      ]),
     );
   }
 }
@@ -903,12 +1086,13 @@ class _FilterStrip extends StatelessWidget {
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Row(
-          children: children.map((child) {
-        return Padding(
-          padding: const EdgeInsetsDirectional.only(end: 8),
-          child: child,
-        );
-      }).toList()),
+        children: children.map((child) {
+          return Padding(
+            padding: const EdgeInsetsDirectional.only(end: 8),
+            child: child,
+          );
+        }).toList(),
+      ),
     );
   }
 }
@@ -920,12 +1104,13 @@ class _MapPage extends StatefulWidget {
   final Future<void> Function() onUpdated;
   final LocalContactController contactController;
 
-  const _MapPage(
-      {required this.tasks,
-      required this.active,
-      required this.savedSession,
-      required this.onUpdated,
-      required this.contactController});
+  const _MapPage({
+    required this.tasks,
+    required this.active,
+    required this.savedSession,
+    required this.onUpdated,
+    required this.contactController,
+  });
 
   @override
   State<_MapPage> createState() => _MapPageState();
@@ -937,9 +1122,13 @@ class _MapPageState extends State<_MapPage> {
   PaymentKind? _paymentFilter;
   TaskProgress? _progressFilter;
 
-  final MapController _mapController = MapController();
+  ml.MapController? _mapController;
   StreamSubscription<Position>? _positionSubscription;
+  StreamSubscription<CompassEvent>? _compassSubscription;
   Position? _currentPosition;
+  double _displayHeading = 0;
+  bool _hasHeading = false;
+  DateTime? _lastCompassCameraUpdate;
   bool _mapReady = false;
   bool _locating = true;
   bool _followUser = true;
@@ -947,7 +1136,7 @@ class _MapPageState extends State<_MapPage> {
   String? _locationError;
   final Map<String, CorrectedLocation> _corrections = {};
 
-  String _correctionKey(TaskItem task) => task.displayReference;
+  String _correctionKey(TaskItem task) => task.realAwb;
 
   Future<void> _loadMapContactData() async {
     final data = await LocalContactStore.instance.getAll();
@@ -1006,6 +1195,8 @@ class _MapPageState extends State<_MapPage> {
     } else if (oldWidget.active && !widget.active) {
       _positionSubscription?.cancel();
       _positionSubscription = null;
+      _compassSubscription?.cancel();
+      _compassSubscription = null;
       _followUser = false;
     }
   }
@@ -1013,13 +1204,15 @@ class _MapPageState extends State<_MapPage> {
   @override
   void dispose() {
     _positionSubscription?.cancel();
-    _mapController.dispose();
+    _compassSubscription?.cancel();
     super.dispose();
   }
 
   Future<void> _startLiveLocation() async {
     await _positionSubscription?.cancel();
+    await _compassSubscription?.cancel();
     _positionSubscription = null;
+    _compassSubscription = null;
     if (mounted) {
       setState(() {
         _locating = true;
@@ -1051,6 +1244,7 @@ class _MapPageState extends State<_MapPage> {
       });
       return;
     }
+
     if (permission == LocationPermission.denied) {
       if (!mounted) return;
       setState(() {
@@ -1060,15 +1254,41 @@ class _MapPageState extends State<_MapPage> {
       });
       return;
     }
+    _startCompass();
 
     final lastKnown = await Geolocator.getLastKnownPosition();
     if (lastKnown != null && mounted) {
+      _updateHeadingFromGps(lastKnown);
       setState(() {
         _currentPosition = lastKnown;
         _locating = false;
       });
       _followPosition(lastKnown, firstFix: true);
     }
+
+    if (!mounted || !widget.active) return;
+    _positionSubscription =
+        Geolocator.getPositionStream(
+          locationSettings: _liveLocationSettings(),
+        ).listen(
+          (position) {
+            if (!mounted || !widget.active) return;
+            _updateHeadingFromGps(position);
+            setState(() {
+              _currentPosition = position;
+              _locating = false;
+              _locationError = null;
+            });
+            _followPosition(position);
+          },
+          onError: (Object error) {
+            if (!mounted) return;
+            setState(() {
+              _locating = false;
+              _locationError = 'توقف تحديث الموقع المباشر: $error';
+            });
+          },
+        );
 
     try {
       final current = await Geolocator.getCurrentPosition(
@@ -1077,7 +1297,9 @@ class _MapPageState extends State<_MapPage> {
           timeLimit: Duration(seconds: 15),
         ),
       );
+      if (!mounted || !widget.active) return;
       if (mounted) {
+        _updateHeadingFromGps(current);
         setState(() {
           _currentPosition = current;
           _locating = false;
@@ -1086,7 +1308,7 @@ class _MapPageState extends State<_MapPage> {
       }
       _followPosition(current, firstFix: true);
     } catch (_) {
-      if (lastKnown == null && mounted) {
+      if (_currentPosition == null && mounted) {
         setState(() {
           _locating = false;
           _locationError =
@@ -1094,43 +1316,117 @@ class _MapPageState extends State<_MapPage> {
         });
       }
     }
+  }
 
-    if (!mounted || !widget.active) return;
-
-    _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
+  LocationSettings _liveLocationSettings() {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 2,
-      ),
-    ).listen(
-      (position) {
-        if (!mounted || !widget.active) return;
-        setState(() {
-          _currentPosition = position;
-          _locating = false;
-          _locationError = null;
-        });
-        _followPosition(position);
-      },
-      onError: (Object error) {
-        if (!mounted) return;
-        setState(() {
-          _locating = false;
-          _locationError = 'توقف تحديث الموقع المباشر: $error';
-        });
-      },
+        distanceFilter: 0,
+        intervalDuration: const Duration(milliseconds: 250),
+      );
+    }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      return AppleSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+        activityType: ActivityType.automotiveNavigation,
+        pauseLocationUpdatesAutomatically: false,
+        allowBackgroundLocationUpdates: false,
+        showBackgroundLocationIndicator: false,
+      );
+    }
+    return const LocationSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 0,
+    );
+  }
+
+  void _startCompass() {
+    final events = FlutterCompass.events;
+    if (events == null) return;
+    _compassSubscription = events.listen((event) {
+      if (!mounted || !widget.active) return;
+      final position = _currentPosition;
+      final gpsHeadingIsReliable =
+          position != null &&
+          position.speed.isFinite &&
+          position.speed >= 1.4 &&
+          position.heading.isFinite &&
+          position.heading >= 0;
+      if (gpsHeadingIsReliable) return;
+
+      final rawHeading = event.heading;
+      if (rawHeading == null || !rawHeading.isFinite || rawHeading < 0) return;
+      _setHeading(rawHeading, smoothing: 0.28);
+
+      final now = DateTime.now();
+      if (_lastCompassCameraUpdate == null ||
+          now.difference(_lastCompassCameraUpdate!).inMilliseconds >= 80) {
+        _lastCompassCameraUpdate = now;
+        _rotateFollowingCamera();
+      }
+    });
+  }
+
+  void _updateHeadingFromGps(Position position) {
+    if (!position.speed.isFinite ||
+        position.speed < 1.0 ||
+        !position.heading.isFinite ||
+        position.heading < 0) {
+      return;
+    }
+    _setHeading(position.heading, smoothing: 0.42);
+  }
+
+  void _setHeading(double value, {required double smoothing}) {
+    final normalized = (value % 360 + 360) % 360;
+    final next = !_hasHeading
+        ? normalized
+        : (_displayHeading +
+                  (((normalized - _displayHeading + 540) % 360) - 180) *
+                      smoothing) %
+              360;
+    if (_hasHeading && (next - _displayHeading).abs() < 0.35) return;
+    if (mounted) {
+      setState(() {
+        _displayHeading = next;
+        _hasHeading = true;
+      });
+    }
+  }
+
+  void _rotateFollowingCamera() {
+    final controller = _mapController;
+    if (!_mapReady || !_followUser || !_hasHeading || controller == null) {
+      return;
+    }
+    unawaited(
+      controller
+          .moveCamera(bearing: _displayHeading, pitch: 45)
+          .catchError((_) {}),
     );
   }
 
   void _followPosition(Position position, {bool firstFix = false}) {
-    if (!_mapReady || !_followUser) return;
+    final controller = _mapController;
+    if (!_mapReady || !_followUser || controller == null) return;
     try {
-      final target = LatLng(position.latitude, position.longitude);
-      _mapController.move(
-          target,
-          (!_hasCenteredOnUser || firstFix)
-              ? 16.5
-              : _mapController.camera.zoom);
+      final target = ml.Geographic(
+        lon: position.longitude,
+        lat: position.latitude,
+      );
+      final currentZoom = controller.camera?.zoom ?? 16.8;
+      unawaited(
+        controller
+            .moveCamera(
+              center: target,
+              zoom: (!_hasCenteredOnUser || firstFix) ? 16.8 : currentZoom,
+              bearing: _hasHeading ? _displayHeading : 0,
+              pitch: 45,
+            )
+            .catchError((_) {}),
+      );
       _hasCenteredOnUser = true;
     } catch (_) {
       // The controller may not be attached while switching tabs.
@@ -1158,9 +1454,9 @@ class _MapPageState extends State<_MapPage> {
   Future<void> _openTask(TaskItem task) async {
     final opened = await NavigationService.openTask(task);
     if (!opened && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تعذر فتح تطبيق الملاحة')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('تعذر فتح تطبيق الملاحة')));
     }
   }
 
@@ -1195,7 +1491,7 @@ class _MapPageState extends State<_MapPage> {
     );
   }
 
-  void _showClusterTasks(List<TaskItem> clusterTasks, LatLng point) {
+  void _showClusterTasks(List<TaskItem> clusterTasks, ml.Geographic point) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -1216,8 +1512,10 @@ class _MapPageState extends State<_MapPage> {
                         color: Colors.green.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Icon(Icons.location_on_rounded,
-                          color: Colors.green),
+                      child: const Icon(
+                        Icons.location_on_rounded,
+                        color: Colors.green,
+                      ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -1226,19 +1524,17 @@ class _MapPageState extends State<_MapPage> {
                         children: [
                           Text(
                             'شحنات في هذا الموقع (${clusterTasks.length})',
-                            style: Theme.of(sheetContext)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
+                            style: Theme.of(sheetContext).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.bold),
                           ),
                           Text(
                             clusterTasks.first.address.isNotEmpty
                                 ? clusterTasks.first.address
-                                : '${point.latitude.toStringAsFixed(5)}, ${point.longitude.toStringAsFixed(5)}',
+                                : '${point.lat.toStringAsFixed(5)}, ${point.lon.toStringAsFixed(5)}',
                             style: const TextStyle(
-                                color: Colors.grey, fontSize: 12),
+                              color: Colors.grey,
+                              fontSize: 12,
+                            ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -1304,8 +1600,10 @@ class _MapPageState extends State<_MapPage> {
                         color: Colors.red.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Icon(Icons.cancel_presentation_rounded,
-                          color: Colors.red),
+                      child: const Icon(
+                        Icons.cancel_presentation_rounded,
+                        color: Colors.red,
+                      ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -1314,12 +1612,8 @@ class _MapPageState extends State<_MapPage> {
                         children: [
                           Text(
                             'الشحنات الملغاة / المستبعدة محلياً (${tasks.length})',
-                            style: Theme.of(sheetContext)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                ),
+                            style: Theme.of(sheetContext).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.bold),
                           ),
                           const Text(
                             'مستبعدة من الخريطة محلياً فقط دون إرسالها للسيرفر',
@@ -1334,9 +1628,7 @@ class _MapPageState extends State<_MapPage> {
               const Divider(height: 1),
               if (tasks.isEmpty)
                 const Expanded(
-                  child: Center(
-                    child: Text('لا توجد شحنات ملغاة محلياً'),
-                  ),
+                  child: Center(child: Text('لا توجد شحنات ملغاة محلياً')),
                 )
               else
                 Expanded(
@@ -1387,9 +1679,9 @@ class _MapPageState extends State<_MapPage> {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
                 child: Text(
                   'شحنات بلا إحداثيات (${tasks.length})',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
                 ),
               ),
               Expanded(
@@ -1416,8 +1708,9 @@ class _MapPageState extends State<_MapPage> {
                       trailing: task.address.isEmpty
                           ? null
                           : const Icon(Icons.open_in_new),
-                      onTap:
-                          task.address.isEmpty ? null : () => _openTask(task),
+                      onTap: task.address.isEmpty
+                          ? null
+                          : () => _openTask(task),
                     );
                   },
                 ),
@@ -1430,39 +1723,47 @@ class _MapPageState extends State<_MapPage> {
   }
 
   List<TaskItem> get _locallyExcludedTasks => widget.tasks.where((task) {
-        final key = '${task.referenceNumber}_${task.id}';
-        return _localStatuses.containsKey(key);
-      }).toList();
+    final key = '${task.referenceNumber}_${task.id}';
+    return _localStatuses.containsKey(key);
+  }).toList();
 
   List<TaskItem> get _filteredTasks => widget.tasks.where((task) {
-        final key = '${task.referenceNumber}_${task.id}';
-        if (_localStatuses.containsKey(key)) return false;
-        final matchesPayment =
-            _paymentFilter == null || task.paymentKind == _paymentFilter;
-        final matchesProgress =
-            _progressFilter == null || task.progress == _progressFilter;
-        return matchesPayment && matchesProgress;
-      }).toList();
+    final key = '${task.referenceNumber}_${task.id}';
+    if (_localStatuses.containsKey(key)) return false;
+    final matchesPayment =
+        _paymentFilter == null || task.paymentKind == _paymentFilter;
+    final matchesProgress =
+        _progressFilter == null || task.progress == _progressFilter;
+    return matchesPayment && matchesProgress;
+  }).toList();
 
-  LatLng _initialCenter(List<TaskItem> located) {
+  ml.Geographic _initialCenter(List<TaskItem> located) {
     final position = _currentPosition;
     if (position != null) {
-      return LatLng(position.latitude, position.longitude);
+      return ml.Geographic(lon: position.longitude, lat: position.latitude);
     }
-    if (located.isEmpty) return const LatLng(24.7136, 46.6753);
-    return LatLng(
-      located.fold<double>(
-              0, (sum, task) => sum + _effectiveLocation(task)!.latitude) /
+    if (located.isEmpty) {
+      return const ml.Geographic(lon: 46.6753, lat: 24.7136);
+    }
+    return ml.Geographic(
+      lon:
+          located.fold<double>(
+            0,
+            (sum, task) => sum + _effectiveLocation(task)!.longitude,
+          ) /
           located.length,
-      located.fold<double>(
-              0, (sum, task) => sum + _effectiveLocation(task)!.longitude) /
+      lat:
+          located.fold<double>(
+            0,
+            (sum, task) => sum + _effectiveLocation(task)!.latitude,
+          ) /
           located.length,
     );
   }
 
-  List<Marker> _customerMarkers(List<TaskItem> located) {
+  List<ml.Marker> _customerMarkers(List<TaskItem> located) {
     final groups = <String, List<TaskItem>>{};
-    final points = <String, LatLng>{};
+    final points = <String, ml.Geographic>{};
 
     for (final task in located) {
       final loc = _effectiveLocation(task);
@@ -1471,7 +1772,7 @@ class _MapPageState extends State<_MapPage> {
           '${loc.latitude.toStringAsFixed(5)}_${loc.longitude.toStringAsFixed(5)}';
       if (!groups.containsKey(key)) {
         groups[key] = [];
-        points[key] = LatLng(loc.latitude, loc.longitude);
+        points[key] = ml.Geographic(lon: loc.longitude, lat: loc.latitude);
       }
       groups[key]!.add(task);
     }
@@ -1483,32 +1784,37 @@ class _MapPageState extends State<_MapPage> {
       final isMultiple = clusterTasks.length > 1;
       final firstTask = clusterTasks.first;
 
-      final hasAnswered = clusterTasks.any((t) =>
-          _contactData['${t.referenceNumber}_${t.id}']?.status == 'answered');
-      final hasNoAnswer = clusterTasks.any((t) =>
-          _contactData['${t.referenceNumber}_${t.id}']?.status == 'no_answer');
+      final hasAnswered = clusterTasks.any(
+        (t) =>
+            _contactData['${t.referenceNumber}_${t.id}']?.status == 'answered',
+      );
+      final hasNoAnswer = clusterTasks.any(
+        (t) =>
+            _contactData['${t.referenceNumber}_${t.id}']?.status == 'no_answer',
+      );
 
       Color markerColor;
       if (hasAnswered && !hasNoAnswer) {
         markerColor = Colors.green;
       } else if (hasNoAnswer) {
         markerColor = Colors.red;
-      } else if (clusterTasks
-          .any((t) => _corrections.containsKey(_correctionKey(t)))) {
+      } else if (clusterTasks.any(
+        (t) => _corrections.containsKey(_correctionKey(t)),
+      )) {
         markerColor = Colors.purple;
-      } else if (clusterTasks
-          .any((t) => t.paymentKind == PaymentKind.cashOnDelivery)) {
+      } else if (clusterTasks.any(
+        (t) => t.paymentKind == PaymentKind.cashOnDelivery,
+      )) {
         markerColor = Colors.orange;
       } else {
         markerColor = Colors.blue;
       }
 
       if (!isMultiple) {
-        return Marker(
+        return ml.Marker(
           point: point,
-          width: 48,
-          height: 48,
-          alignment: Alignment.topCenter,
+          size: const Size(48, 48),
+          alignment: Alignment.bottomCenter,
           child: Tooltip(
             message: firstTask.storeName.isNotEmpty
                 ? firstTask.storeName
@@ -1527,11 +1833,10 @@ class _MapPageState extends State<_MapPage> {
       }
 
       // Clustered marker with count badge
-      return Marker(
+      return ml.Marker(
         point: point,
-        width: 52,
-        height: 52,
-        alignment: Alignment.topCenter,
+        size: const Size(52, 52),
+        alignment: Alignment.bottomCenter,
         child: Tooltip(
           message: '${clusterTasks.length} شحنات في هذا الموقع',
           child: GestureDetector(
@@ -1548,8 +1853,10 @@ class _MapPageState extends State<_MapPage> {
                 Positioned(
                   top: 5,
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 1,
+                    ),
                     decoration: const BoxDecoration(
                       color: Colors.white,
                       shape: BoxShape.circle,
@@ -1557,8 +1864,10 @@ class _MapPageState extends State<_MapPage> {
                         BoxShadow(color: Colors.black38, blurRadius: 2),
                       ],
                     ),
-                    constraints:
-                        const BoxConstraints(minWidth: 19, minHeight: 19),
+                    constraints: const BoxConstraints(
+                      minWidth: 19,
+                      minHeight: 19,
+                    ),
                     child: Center(
                       child: Text(
                         '${clusterTasks.length}',
@@ -1579,18 +1888,15 @@ class _MapPageState extends State<_MapPage> {
     }).toList();
   }
 
-  Marker? _userMarker() {
+  ml.Marker? _userMarker() {
     final position = _currentPosition;
     if (position == null) return null;
-    final heading = position.heading.isFinite && position.heading >= 0
-        ? position.heading
-        : 0.0;
-    return Marker(
-      point: LatLng(position.latitude, position.longitude),
-      width: 42,
-      height: 42,
+    return ml.Marker(
+      point: ml.Geographic(lon: position.longitude, lat: position.latitude),
+      size: const Size(42, 42),
+      rotate: true,
       child: Transform.rotate(
-        angle: heading * math.pi / 180,
+        angle: _displayHeading * math.pi / 180,
         child: Container(
           decoration: const BoxDecoration(
             shape: BoxShape.circle,
@@ -1600,68 +1906,68 @@ class _MapPageState extends State<_MapPage> {
             ],
           ),
           padding: const EdgeInsets.all(5),
-          child: const Icon(
-            Icons.navigation,
-            color: Colors.blue,
-            size: 30,
-          ),
+          child: const Icon(Icons.navigation, color: Colors.blue, size: 30),
         ),
       ),
     );
   }
 
   void _fitAll(List<TaskItem> located) {
-    final points = <LatLng>[
+    final controller = _mapController;
+    final points = <ml.Geographic>[
       ...located.map((task) {
         final location = _effectiveLocation(task)!;
-        return LatLng(location.latitude, location.longitude);
+        return ml.Geographic(lon: location.longitude, lat: location.latitude);
       }),
       if (_currentPosition != null)
-        LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+        ml.Geographic(
+          lon: _currentPosition!.longitude,
+          lat: _currentPosition!.latitude,
+        ),
     ];
-    if (!_mapReady || points.isEmpty) return;
+    if (!_mapReady || points.isEmpty || controller == null) return;
 
     setState(() => _followUser = false);
     if (points.length == 1) {
-      _mapController.move(points.first, 15);
+      unawaited(
+        controller
+            .animateCamera(
+              center: points.first,
+              zoom: 15.5,
+              bearing: 0,
+              pitch: 40,
+              nativeDuration: const Duration(milliseconds: 450),
+            )
+            .catchError((_) {}),
+      );
       return;
     }
-
-    var minLat = points.first.latitude;
-    var maxLat = points.first.latitude;
-    var minLng = points.first.longitude;
-    var maxLng = points.first.longitude;
-    for (final point in points.skip(1)) {
-      minLat = math.min(minLat, point.latitude);
-      maxLat = math.max(maxLat, point.latitude);
-      minLng = math.min(minLng, point.longitude);
-      maxLng = math.max(maxLng, point.longitude);
-    }
-    final center = LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2);
-    final span = math.max(maxLat - minLat, maxLng - minLng);
-    final zoom = span < 0.005
-        ? 15.0
-        : span < 0.02
-            ? 13.5
-            : span < 0.08
-                ? 11.5
-                : span < 0.25
-                    ? 9.5
-                    : 7.5;
-    _mapController.move(center, zoom);
+    unawaited(
+      controller
+          .fitBounds(
+            bounds: ml.LngLatBounds.fromPoints(points),
+            bearing: 0,
+            pitch: 35,
+            padding: const EdgeInsets.fromLTRB(52, 120, 52, 90),
+            nativeDuration: const Duration(milliseconds: 500),
+          )
+          .catchError((_) {}),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final filtered = _filteredTasks;
-    final located =
-        filtered.where((task) => _effectiveLocation(task) != null).toList();
-    final withoutCoordinates =
-        filtered.where((task) => _effectiveLocation(task) == null).toList();
+    final located = filtered
+        .where((task) => _effectiveLocation(task) != null)
+        .toList();
+    final withoutCoordinates = filtered
+        .where((task) => _effectiveLocation(task) == null)
+        .toList();
     final locallyExcluded = _locallyExcludedTasks;
     final initialCenter = _initialCenter(located);
     final scheme = Theme.of(context).colorScheme;
-    final markers = <Marker>[
+    final markers = <ml.Marker>[
       ..._customerMarkers(located),
       if (_userMarker() case final marker?) marker,
     ];
@@ -1678,9 +1984,8 @@ class _MapPageState extends State<_MapPage> {
             ChoiceChip(
               label: const Text('كاش'),
               selected: _paymentFilter == PaymentKind.cashOnDelivery,
-              onSelected: (_) => setState(
-                () => _paymentFilter = PaymentKind.cashOnDelivery,
-              ),
+              onSelected: (_) =>
+                  setState(() => _paymentFilter = PaymentKind.cashOnDelivery),
             ),
             ChoiceChip(
               label: const Text('مدفوعة'),
@@ -1700,16 +2005,14 @@ class _MapPageState extends State<_MapPage> {
             ChoiceChip(
               label: const Text('المتبقي'),
               selected: _progressFilter == TaskProgress.remaining,
-              onSelected: (_) => setState(
-                () => _progressFilter = TaskProgress.remaining,
-              ),
+              onSelected: (_) =>
+                  setState(() => _progressFilter = TaskProgress.remaining),
             ),
             ChoiceChip(
               label: const Text('المنجز'),
               selected: _progressFilter == TaskProgress.completed,
-              onSelected: (_) => setState(
-                () => _progressFilter = TaskProgress.completed,
-              ),
+              onSelected: (_) =>
+                  setState(() => _progressFilter = TaskProgress.completed),
             ),
           ],
         ),
@@ -1720,33 +2023,47 @@ class _MapPageState extends State<_MapPage> {
                 onPointerDown: (_) {
                   if (_followUser) setState(() => _followUser = false);
                 },
-                child: FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: initialCenter,
-                    initialZoom: _currentPosition != null ? 15.5 : 11,
+                child: ml.MapLibreMap(
+                  options: ml.MapOptions(
+                    initStyle: 'https://tiles.openfreemap.org/styles/liberty',
+                    initCenter: initialCenter,
+                    initZoom: _currentPosition != null ? 16.3 : 11,
+                    initPitch: 45,
+                    initBearing: _hasHeading ? _displayHeading : 0,
                     minZoom: 3,
-                    maxZoom: 19,
-                    onMapReady: () {
-                      _mapReady = true;
-                      if (_currentPosition != null) {
-                        _centerOnUser();
-                      } else if (located.isNotEmpty) {
-                        Future<void>.delayed(
-                          const Duration(milliseconds: 350),
-                          () => _fitAll(located),
-                        );
-                      }
-                    },
+                    maxZoom: 20,
+                    maxPitch: 60,
+                    gestures: const ml.MapGestures.all(),
                   ),
+                  onMapCreated: (controller) {
+                    _mapController = controller;
+                    _mapReady = true;
+                    if (_currentPosition != null) {
+                      _centerOnUser();
+                    } else if (located.isNotEmpty) {
+                      Future<void>.delayed(
+                        const Duration(milliseconds: 350),
+                        () {
+                          if (mounted) _fitAll(located);
+                        },
+                      );
+                    }
+                  },
+                  onEvent: (event) {
+                    if (event is ml.MapEventStartMoveCamera &&
+                        event.reason == ml.CameraChangeReason.apiGesture &&
+                        _followUser &&
+                        mounted) {
+                      setState(() => _followUser = false);
+                    }
+                  },
                   children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.example.sls_assistant_pro',
-                      maxNativeZoom: 19,
+                    ml.WidgetLayer(markers: markers, allowInteraction: true),
+                    const ml.SourceAttribution(
+                      alignment: Alignment.bottomLeft,
+                      padding: EdgeInsets.only(left: 6, bottom: 4),
+                      showMapLibre: true,
                     ),
-                    MarkerLayer(markers: markers),
                   ],
                 ),
               ),
@@ -1783,7 +2100,7 @@ class _MapPageState extends State<_MapPage> {
                             _locating
                                 ? 'جاري تحديد موقعك المباشر…'
                                 : _locationError ??
-                                    'موقعك مباشر • ${located.length} عميل على الخريطة',
+                                      'موقع مباشر • دقة ±${_currentPosition?.accuracy.round() ?? 0}م • ${located.length} عميل',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontWeight: FontWeight.w700),
@@ -1853,23 +2170,6 @@ class _MapPageState extends State<_MapPage> {
                     ),
                   ),
                 ),
-              Positioned(
-                left: 8,
-                bottom: 8,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: scheme.surface.withValues(alpha: 0.88),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                    child: Text(
-                      '© OpenStreetMap contributors',
-                      style: TextStyle(fontSize: 10),
-                    ),
-                  ),
-                ),
-              ),
             ],
           ),
         ),
@@ -1886,11 +2186,14 @@ class _MapPageState extends State<_MapPage> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.red,
                           side: BorderSide(
-                              color: Colors.red.withValues(alpha: 0.5)),
+                            color: Colors.red.withValues(alpha: 0.5),
+                          ),
                         ),
                         onPressed: () => _showLocallyExcluded(locallyExcluded),
-                        icon: const Icon(Icons.cancel_presentation_rounded,
-                            size: 18),
+                        icon: const Icon(
+                          Icons.cancel_presentation_rounded,
+                          size: 18,
+                        ),
                         label: Text(
                           'الملغاة محلياً (${locallyExcluded.length})',
                           maxLines: 1,
@@ -1944,7 +2247,9 @@ class _ScannerTab extends StatelessWidget {
                 color: Colors.green.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(40),
                 border: Border.all(
-                    color: Colors.green.withValues(alpha: 0.2), width: 2),
+                  color: Colors.green.withValues(alpha: 0.2),
+                  width: 2,
+                ),
               ),
               child: const Icon(
                 Icons.qr_code_scanner_rounded,
@@ -1955,10 +2260,7 @@ class _ScannerTab extends StatelessWidget {
             const SizedBox(height: 32),
             const Text(
               'جاهز للمسح الضوئي؟',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             const Text(
@@ -1979,8 +2281,10 @@ class _ScannerTab extends StatelessWidget {
               icon: const Icon(Icons.camera_alt_rounded),
               label: const Text('افتح الكاميرا الآن'),
               style: ElevatedButton.styleFrom(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 40,
+                  vertical: 16,
+                ),
               ),
             ),
           ],

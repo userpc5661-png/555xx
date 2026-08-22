@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build Mobile Apps
 
 on:
   push:
@@ -8,8 +8,69 @@ on:
   workflow_dispatch:
 
 jobs:
+  verify:
+    name: Verify Flutter project
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+
+      - name: Run tests
+        run: flutter test
+
+  build-android:
+    name: Build Android App (.apk)
+    needs: verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.0'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SLSDriverNext_Android_APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
   build-ios:
     name: Build iOS App (.ipa)
+    needs: verify
     runs-on: macos-14
 
     steps:
@@ -19,8 +80,12 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.0'
           channel: 'stable'
           cache: true
+
+      - name: Enable Swift Package Manager
+        run: flutter config --enable-swift-package-manager
 
       - name: Install dependencies
         run: flutter pub get
@@ -34,13 +99,13 @@ jobs:
           mkdir -p build-output/Payload
           cp -r build/ios/iphoneos/Runner.app build-output/Payload/
           cd build-output
-          zip -r SLSAssistant_iOS.ipa Payload
+          zip -r SLSDriverNext_iOS.ipa Payload
           cd ..
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SLSAssistant_iOS_IPA
-          path: build-output/SLSAssistant_iOS.ipa
+          name: SLSDriverNext_iOS_IPA
+          path: build-output/SLSDriverNext_iOS.ipa
           if-no-files-found: error
           retention-days: 14
