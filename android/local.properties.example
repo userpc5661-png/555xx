@@ -1,0 +1,4 @@
+# Copy this file to android/local.properties and update the paths for your computer.
+# Use escaped backslashes on Windows, for example C:\\src\\flutter
+sdk.dir=C:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk
+flutter.sdk=C:\\src\\flutter

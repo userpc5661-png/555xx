@@ -1,0 +1,46 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    name: Build iOS App (.ipa)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS Application (No CodeSign)
+        run: |
+          flutter build ios --release --no-codesign
+
+      - name: Package .ipa File
+        run: |
+          mkdir -p build-output/Payload
+          cp -r build/ios/iphoneos/Runner.app build-output/Payload/
+          cd build-output
+          zip -r SLSAssistant_iOS.ipa Payload
+          cd ..
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SLSAssistant_iOS_IPA
+          path: build-output/SLSAssistant_iOS.ipa
+          if-no-files-found: error
+          retention-days: 14
