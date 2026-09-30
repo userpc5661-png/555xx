@@ -107,13 +107,6 @@ class TaskCard extends StatelessWidget {
       );
       return;
     }
-    if (contactController != null) {
-      await contactController!.setOutcome(
-        _storageKey,
-        'answered',
-        type: 'whatsapp',
-      );
-    }
   }
 
   Future<void> _openSms(BuildContext context) async {

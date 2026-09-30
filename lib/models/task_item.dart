@@ -138,6 +138,17 @@ class TaskItem {
 
   /// Returns the actual AWB/Tracking number for API calls, prioritizing
   /// official SLS fields over display references.
+  String get baseAwb {
+    final awb = realAwb.trim();
+    final match = RegExp(r'^(.*?)[-_]\d+$').firstMatch(awb);
+    if (match != null && match.group(1) != null && match.group(1)!.trim().isNotEmpty) {
+      return match.group(1)!.trim();
+    }
+    return awb;
+  }
+
+  bool get isMultiPiece => RegExp(r'[-_]\d+$').hasMatch(realAwb.trim());
+
   String get realAwb {
     final value = _findRawValue(raw, const [
       'order_awb',

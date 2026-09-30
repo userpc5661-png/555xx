@@ -1136,7 +1136,8 @@ class _MapPageState extends State<_MapPage> {
   String? _locationError;
   final Map<String, CorrectedLocation> _corrections = {};
 
-  String _correctionKey(TaskItem task) => task.realAwb;
+  String _correctionKey(TaskItem task) =>
+      task.realAwb.trim().isNotEmpty ? task.realAwb.trim() : task.displayReference.trim();
 
   Future<void> _loadMapContactData() async {
     final data = await LocalContactStore.instance.getAll();
@@ -1476,6 +1477,8 @@ class _MapPageState extends State<_MapPage> {
               await widget.onUpdated();
               await _loadLocalStatuses();
               await _loadMapContactData();
+              await _loadCorrections();
+              if (mounted) setState(() {});
             },
             contactController: widget.contactController,
             contactData: _contactData[storageKey],
@@ -1483,6 +1486,8 @@ class _MapPageState extends State<_MapPage> {
             onLocalStatusChanged: () async {
               await widget.onUpdated();
               await _loadLocalStatuses();
+              await _loadMapContactData();
+              await _loadCorrections();
               if (mounted) setState(() {});
             },
           ),
@@ -1496,83 +1501,91 @@ class _MapPageState extends State<_MapPage> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: FractionallySizedBox(
-          heightFactor: 0.8,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.green.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) => SafeArea(
+          child: FractionallySizedBox(
+            heightFactor: 0.8,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.location_on_rounded,
+                          color: Colors.green,
+                        ),
                       ),
-                      child: const Icon(
-                        Icons.location_on_rounded,
-                        color: Colors.green,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'شحنات في هذا الموقع (${clusterTasks.length})',
-                            style: Theme.of(sheetContext).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.bold),
-                          ),
-                          Text(
-                            clusterTasks.first.address.isNotEmpty
-                                ? clusterTasks.first.address
-                                : '${point.lat.toStringAsFixed(5)}, ${point.lon.toStringAsFixed(5)}',
-                            style: const TextStyle(
-                              color: Colors.grey,
-                              fontSize: 12,
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'شحنات في هذا الموقع (${clusterTasks.length})',
+                              style: Theme.of(sheetContext).textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.bold),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
+                            Text(
+                              clusterTasks.first.address.isNotEmpty
+                                  ? clusterTasks.first.address
+                                  : '${point.lat.toStringAsFixed(5)}, ${point.lon.toStringAsFixed(5)}',
+                              style: const TextStyle(
+                                color: Colors.grey,
+                                fontSize: 12,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 24),
-                  itemCount: clusterTasks.length,
-                  itemBuilder: (context, index) {
-                    final task = clusterTasks[index];
-                    final storageKey = '${task.referenceNumber}_${task.id}';
-                    return TaskCard(
-                      task: task,
-                      savedSession: widget.savedSession,
-                      onUpdated: () async {
-                        await widget.onUpdated();
-                        await _loadLocalStatuses();
-                        await _loadMapContactData();
-                      },
-                      contactController: widget.contactController,
-                      contactData: _contactData[storageKey],
-                      localStatus: _localStatuses[storageKey],
-                      onLocalStatusChanged: () async {
-                        await widget.onUpdated();
-                        await _loadLocalStatuses();
-                        if (mounted) setState(() {});
-                      },
-                    );
-                  },
+                const Divider(height: 1),
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.only(bottom: 24),
+                    itemCount: clusterTasks.length,
+                    itemBuilder: (context, index) {
+                      final task = clusterTasks[index];
+                      final storageKey = '${task.referenceNumber}_${task.id}';
+                      return TaskCard(
+                        task: task,
+                        savedSession: widget.savedSession,
+                        onUpdated: () async {
+                          await widget.onUpdated();
+                          await _loadLocalStatuses();
+                          await _loadMapContactData();
+                          await _loadCorrections();
+                          if (mounted) setState(() {});
+                          setSheetState(() {});
+                        },
+                        contactController: widget.contactController,
+                        contactData: _contactData[storageKey],
+                        localStatus: _localStatuses[storageKey],
+                        onLocalStatusChanged: () async {
+                          await widget.onUpdated();
+                          await _loadLocalStatuses();
+                          await _loadMapContactData();
+                          await _loadCorrections();
+                          if (mounted) setState(() {});
+                          setSheetState(() {});
+                        },
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

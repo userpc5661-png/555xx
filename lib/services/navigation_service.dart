@@ -9,29 +9,49 @@ class NavigationService {
 
   static Future<bool> openTask(TaskItem task) async {
     final effective = await LocationCorrectionService.effectiveLocation(task);
-    final query = effective != null
+    final destination = effective != null
         ? '${effective.latitude},${effective.longitude}'
         : task.address.trim();
-    if (query.isEmpty) return false;
+    if (destination.isEmpty) return false;
 
-    final candidates = <Uri>[
-      Uri.https('www.google.com', '/maps/search/', <String, String>{
-        'api': '1',
-        'query': query,
-      }),
-    ];
-    if (defaultTargetPlatform == TargetPlatform.android && effective != null) {
-      candidates.insert(
-        0,
-        Uri.parse(
-          'geo:${effective.latitude},${effective.longitude}?q=${Uri.encodeComponent(query)}',
-        ),
+    final candidates = <Uri>[];
+
+    if (effective != null) {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        candidates.add(
+          Uri.parse('google.navigation:q=${effective.latitude},${effective.longitude}'),
+        );
+      }
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        candidates.add(
+          Uri.parse('comgooglemaps://?daddr=${effective.latitude},${effective.longitude}&directionsmode=driving'),
+        );
+        candidates.add(
+          Uri.parse('https://maps.apple.com/?daddr=${effective.latitude},${effective.longitude}&dirflg=d'),
+        );
+      }
+      // Universal Google Maps directions URL (direct driving navigation mode)
+      candidates.add(
+        Uri.https('www.google.com', '/maps/dir/', <String, String>{
+          'api': '1',
+          'destination': destination,
+          'travelmode': 'driving',
+        }),
       );
-    }
-    if (defaultTargetPlatform == TargetPlatform.iOS) {
-      candidates.insert(
-        0,
-        Uri.parse('comgooglemaps://?q=${Uri.encodeComponent(query)}'),
+    } else {
+      // Fallback for address text search if no coordinates exist
+      candidates.add(
+        Uri.https('www.google.com', '/maps/dir/', <String, String>{
+          'api': '1',
+          'destination': destination,
+          'travelmode': 'driving',
+        }),
+      );
+      candidates.add(
+        Uri.https('www.google.com', '/maps/search/', <String, String>{
+          'api': '1',
+          'query': destination,
+        }),
       );
     }
 

@@ -607,20 +607,28 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       double? latitude;
       double? longitude;
       try {
-        final position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            timeLimit: Duration(seconds: 8),
-          ),
-        );
-        latitude = position.latitude;
-        longitude = position.longitude;
+        final lastKnown = await Geolocator.getLastKnownPosition();
+        if (lastKnown != null) {
+          latitude = lastKnown.latitude;
+          longitude = lastKnown.longitude;
+        } else {
+          final position = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              timeLimit: Duration(seconds: 3),
+            ),
+          );
+          latitude = position.latitude;
+          longitude = position.longitude;
+        }
         _diagnostics.setContext(
           'GPS coordinates',
           '$latitude, $longitude',
         );
       } catch (error) {
-        _diagnostics.setContext('GPS coordinates', 'Unavailable: $error');
+        latitude ??= widget.task.latitude;
+        longitude ??= widget.task.longitude;
+        _diagnostics.setContext('GPS coordinates', 'Fallback: $latitude, $longitude ($error)');
       }
       if (needsAddress && (latitude == null || longitude == null)) {
         throw const ScanApiException(

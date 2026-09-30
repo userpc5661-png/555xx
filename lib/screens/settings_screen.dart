@@ -92,6 +92,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const Divider(height: 1),
+            _ServerStatsCard(tasks: widget.tasks),
+            const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.sms_outlined),
               title: const Text('رقم واتساب المندوب'),
@@ -324,3 +326,139 @@ class _WalletMetric extends StatelessWidget {
     ),
   );
 }
+
+class _ServerStatsCard extends StatefulWidget {
+  final List<TaskItem> tasks;
+  const _ServerStatsCard({required this.tasks});
+
+  @override
+  State<_ServerStatsCard> createState() => _ServerStatsCardState();
+}
+
+class _ServerStatsCardState extends State<_ServerStatsCard> {
+  int _todayCount = 0;
+  int _monthCount = 0;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStats();
+  }
+
+  Future<void> _loadStats() async {
+    final history = await DeliveryHistoryStore.instance.allRecords();
+    final now = DateTime.now();
+    final todayCount = history.where((r) {
+      return r.timestamp.year == now.year &&
+          r.timestamp.month == now.month &&
+          r.timestamp.day == now.day;
+    }).length;
+
+    final monthCount = history.where((r) {
+      return r.timestamp.year == now.year && r.timestamp.month == now.month;
+    }).length;
+
+    if (mounted) {
+      setState(() {
+        _todayCount = todayCount;
+        _monthCount = monthCount;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final serverCompleted = widget.tasks
+        .where((t) => t.progress == TaskProgress.completed)
+        .length;
+    final totalDelivered = serverCompleted + _monthCount;
+    final totalAssigned = widget.tasks.length;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Card(
+        child: ExpansionTile(
+          leading: const Icon(Icons.analytics_outlined, color: Colors.blue),
+          title: const Text(
+            'إحصائيات الشحنات والتوصيل',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text('توصيل اليوم: ${serverCompleted + _todayCount} شحنة'),
+          children: [
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    _StatRow(
+                      title: 'توصيل اليوم (السيرفر + المحلي)',
+                      value: '${serverCompleted + _todayCount}',
+                      icon: Icons.today_outlined,
+                      color: Colors.green,
+                    ),
+                    const Divider(),
+                    _StatRow(
+                      title: 'توصيل الشهر الحالي',
+                      value: '$totalDelivered',
+                      icon: Icons.calendar_month_outlined,
+                      color: Colors.blue,
+                    ),
+                    const Divider(),
+                    _StatRow(
+                      title: 'إجمالي الشحنات المسندة بالسيرفر',
+                      value: '$totalAssigned',
+                      icon: Icons.local_shipping_outlined,
+                      color: Colors.orange,
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatRow extends StatelessWidget {
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color color;
+  const _StatRow({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(width: 12),
+          Expanded(child: Text(title)),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+

@@ -19,6 +19,9 @@ class DeliveryHistoryRecord {
     required this.completedAt,
   });
 
+  DateTime get timestamp => completedAt;
+
+
   Map<String, dynamic> toJson() => {
         'awb': awb,
         'customer_name': customerName,
@@ -50,6 +53,8 @@ class DeliveryHistoryStore {
 
   String _dayKey(DateTime value) =>
       '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+
+  Future<List<DeliveryHistoryRecord>> allRecords() async => _readAll();
 
   Future<List<DeliveryHistoryRecord>> today() async {
     final all = await _readAll();
