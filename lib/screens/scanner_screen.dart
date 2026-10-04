@@ -47,11 +47,41 @@ class _ScannerScreenState extends State<ScannerScreen>
   // IDs returned by the server for shipments confirmed in this session, so
   // the list can mark them green even if the label shows another number.
   final Set<String> _confirmedOrderKeys = {};
+  // Codes scanned during this group session that are not part of the group
+  // (the server refused to confirm them). Display only.
+  final List<_NotInGroupScan> _notInGroup = [];
   int _initialConfirmedCount = 0;
   int _locallyConfirmedCount = 0;
 
   static String _key(String value) =>
       value.trim().replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+
+  static String _withoutPieceSuffix(String key) =>
+      key.replaceFirst(RegExp(r'[-_]\d+$'), '');
+
+  /// Whether a scanned code / looked-up shipment is one of the group's
+  /// shipments, as far as the app can tell from the group data.
+  bool _belongsToGroup(String code, ScannedShipment? shipment) {
+    final group = _orderGroup;
+    if (group == null) return false;
+    final scanned = {
+      _key(code),
+      _withoutPieceSuffix(code.trim()).replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase(),
+      if (shipment != null) ...[
+        _key(shipment.referenceNumber),
+        _key(shipment.actualAwb),
+        '${shipment.id}',
+      ],
+    }..remove('');
+    return group.orders.any((order) {
+      final keys = {
+        _key(order.referenceNumber),
+        _key(order.orderId),
+        if (order.id != null) '${order.id}',
+      }..remove('');
+      return keys.any(scanned.contains);
+    });
+  }
 
   /// Display only: whether [order] was scanned (now or before this session).
   bool _isOrderScanned(GroupOrder order) {
@@ -557,6 +587,7 @@ class _ScannerScreenState extends State<ScannerScreen>
           group.orders.where((order) => order.isConfirmed).length;
       _locallyConfirmedCount = 0;
       _confirmedOrderKeys.clear();
+      _notInGroup.clear();
       _confirmedAwbs
         ..clear()
         ..addAll(
@@ -579,20 +610,37 @@ class _ScannerScreenState extends State<ScannerScreen>
       throw StateError('تم مسح هذه الشحنة وتأكيدها مسبقًا في هذه الجلسة.');
     }
 
-    final shipment = await _repository.scanOrder(awb);
-    await _repository.confirmOrder(
-      groupId: group.id,
-      orderId: shipment.id,
-      orderAwb: awb,
-    );
+    // Same requests as before; a failure is only recorded for the list
+    // ("scanned but not in this group") and then shown as usual.
+    ScannedShipment? shipment;
+    try {
+      shipment = await _repository.scanOrder(awb);
+      await _repository.confirmOrder(
+        groupId: group.id,
+        orderId: shipment.id,
+        orderAwb: awb,
+      );
+    } catch (error) {
+      if (mounted && !_belongsToGroup(awb, shipment)) {
+        final message = error is ScanApiException
+            ? error.message
+            : error.toString();
+        setState(() {
+          _notInGroup.removeWhere((item) => item.code == awb);
+          _notInGroup.add(_NotInGroupScan(awb, message));
+        });
+      }
+      rethrow;
+    }
+    final confirmed = shipment;
     if (!mounted) return;
     setState(() {
       _confirmedAwbs.add(awb);
       _confirmedOrderKeys.addAll({
         _key(awb),
-        _key(shipment.referenceNumber),
-        _key(shipment.actualAwb),
-        '${shipment.id}',
+        _key(confirmed.referenceNumber),
+        _key(confirmed.actualAwb),
+        '${confirmed.id}',
       }..remove(''));
       _locallyConfirmedCount += 1;
       _busy = false;
@@ -667,6 +715,7 @@ class _ScannerScreenState extends State<ScannerScreen>
               Flexible(child: _GroupOrdersList(
                 orders: group.orders,
                 isScanned: _isOrderScanned,
+                notInGroup: _notInGroup,
               )),
             ],
           ),
@@ -734,6 +783,7 @@ class _ScannerScreenState extends State<ScannerScreen>
                   child: _GroupOrdersList(
                     orders: group.orders,
                     isScanned: _isOrderScanned,
+                    notInGroup: _notInGroup,
                   ),
                 ),
               ],
@@ -847,11 +897,21 @@ class _ScannerScreenState extends State<ScannerScreen>
                                 : _confirmedCount / _orderGroup!.orders.length,
                           ),
                           const SizedBox(height: 6),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 170),
+                            child: _GroupOrdersList(
+                              orders: _orderGroup!.orders,
+                              isScanned: _isOrderScanned,
+                              notInGroup: _notInGroup,
+                              compact: true,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
                           OutlinedButton.icon(
                             onPressed: _showGroupOrders,
                             icon: const Icon(Icons.list_alt_rounded),
                             label: Text(
-                              'قائمة الشحنات ($_confirmedCount/${_orderGroup!.orders.length})',
+                              'عرض القائمة كاملة ($_confirmedCount/${_orderGroup!.orders.length})',
                             ),
                           ),
                           const SizedBox(height: 6),
@@ -938,88 +998,171 @@ class _ScannerScreenState extends State<ScannerScreen>
   }
 }
 
-/// Every shipment of the group: green = scanned, red = not scanned yet.
+class _NotInGroupScan {
+  final String code;
+  final String message;
+  const _NotInGroupScan(this.code, this.message);
+}
+
+/// Every shipment of the group, in three sections: remaining (red),
+/// scanned (green), and scanned but not in this group (orange).
 class _GroupOrdersList extends StatelessWidget {
   final List<GroupOrder> orders;
   final bool Function(GroupOrder) isScanned;
+  final List<_NotInGroupScan> notInGroup;
+  final bool compact;
 
-  const _GroupOrdersList({required this.orders, required this.isScanned});
+  const _GroupOrdersList({
+    required this.orders,
+    required this.isScanned,
+    this.notInGroup = const [],
+    this.compact = false,
+  });
+
+  static String _number(GroupOrder order) =>
+      order.referenceNumber.isNotEmpty ? order.referenceNumber : order.orderId;
 
   @override
   Widget build(BuildContext context) {
-    final scanned = orders.where(isScanned).length;
-    final missing = orders.length - scanned;
-    // Not scanned first, so missing shipments are easy to spot.
-    final sorted = [...orders]..sort(
-        (a, b) => (isScanned(a) ? 1 : 0) - (isScanned(b) ? 1 : 0),
-      );
+    final remaining = orders.where((o) => !isScanned(o)).toList();
+    final scanned = orders.where(isScanned).toList();
+
+    final rows = <Widget>[
+      if (remaining.isNotEmpty)
+        _SectionHeader('باقي، لم تُمسح (${remaining.length})', Colors.red),
+      for (final order in remaining)
+        _OrderRow(
+          number: _number(order),
+          color: Colors.red,
+          icon: Icons.cancel,
+          note: 'لم تُمسح',
+          strike: true,
+          compact: compact,
+        ),
+      if (notInGroup.isNotEmpty)
+        _SectionHeader(
+          'ممسوحة وليست في المجموعة (${notInGroup.length})',
+          Colors.orange,
+        ),
+      for (final extra in notInGroup)
+        _OrderRow(
+          number: extra.code,
+          color: Colors.orange.shade800,
+          icon: Icons.report_problem,
+          note: compact ? 'ليست في المجموعة' : extra.message,
+          strike: false,
+          compact: compact,
+        ),
+      if (scanned.isNotEmpty)
+        _SectionHeader('تم المسح (${scanned.length})', Colors.green),
+      for (final order in scanned)
+        _OrderRow(
+          number: _number(order),
+          color: Colors.green,
+          icon: Icons.check_circle,
+          note: 'تم المسح',
+          strike: false,
+          compact: compact,
+        ),
+    ];
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'تم المسح: $scanned  •  لم تُمسح: $missing',
+          'الإجمالي ${orders.length}  •  تم المسح ${scanned.length}  •  '
+          'باقي ${remaining.length}'
+          '${notInGroup.isEmpty ? '' : '  •  خارج المجموعة ${notInGroup.length}'}',
           style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: missing == 0 ? Colors.green : Colors.red,
+            fontSize: compact ? 12 : 14,
+            color: remaining.isEmpty && notInGroup.isEmpty
+                ? Colors.green
+                : Colors.red,
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Flexible(
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: orders.length,
-            itemBuilder: (context, index) {
-              final order = sorted[index];
-              final ok = isScanned(order);
-              final color = ok ? Colors.green : Colors.red;
-              final number = order.referenceNumber.isNotEmpty
-                  ? order.referenceNumber
-                  : order.orderId;
-              return Container(
-                margin: const EdgeInsets.symmetric(vertical: 3),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  border: Border.all(color: color.withValues(alpha: 0.6)),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      ok ? Icons.check_circle : Icons.cancel,
-                      color: color,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        number,
-                        textDirection: TextDirection.ltr,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: color,
-                          decoration:
-                              ok ? null : TextDecoration.lineThrough,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      ok ? 'تم المسح' : 'لم تُمسح',
-                      style: TextStyle(color: color, fontSize: 12),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+          child: ListView(shrinkWrap: true, children: rows),
         ),
       ],
     );
   }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final Color color;
+  const _SectionHeader(this.title, this.color);
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 8, bottom: 2),
+        child: Text(
+          title,
+          style: TextStyle(color: color, fontWeight: FontWeight.w800),
+        ),
+      );
+}
+
+class _OrderRow extends StatelessWidget {
+  final String number;
+  final Color color;
+  final IconData icon;
+  final String note;
+  final bool strike;
+  final bool compact;
+
+  const _OrderRow({
+    required this.number,
+    required this.color,
+    required this.icon,
+    required this.note,
+    required this.strike,
+    required this.compact,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: EdgeInsets.symmetric(vertical: compact ? 2 : 3),
+        padding: EdgeInsets.symmetric(
+          horizontal: 10,
+          vertical: compact ? 5 : 8,
+        ),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          border: Border.all(color: color.withValues(alpha: 0.6)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: compact ? 16 : 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                number,
+                textDirection: TextDirection.ltr,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                  decoration: strike ? TextDecoration.lineThrough : null,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                note,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.end,
+                style: TextStyle(color: color, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      );
 }
 
 class _ShipmentInfoRow extends StatelessWidget {
