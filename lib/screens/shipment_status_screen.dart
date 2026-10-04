@@ -17,7 +17,9 @@ import '../services/softpos_service.dart';
 import '../services/whatsapp_action_service.dart';
 import '../utils/latin_digits_formatter.dart';
 import '../utils/national_address_utils.dart';
+import '../utils/status_verification.dart';
 import '../widgets/location_correction_dialog.dart';
+import '../widgets/top_toast.dart';
 import 'scanner_screen.dart';
 
 enum ShipmentStatusMode { all, deliveredOnly, nonDeliveredOnly }
@@ -74,6 +76,9 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   bool _loading = true;
   bool _submitting = false;
   String? _error;
+
+  /// What the send button is doing right now (sending / verifying).
+  String? _step;
 
   // Diagnostics fields
   Map<String, dynamic>? _lastPayload;
@@ -384,8 +389,9 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
     if (source == null) return;
     final picked = await _picker.pickImage(
       source: source,
-      imageQuality: 82,
-      maxWidth: 1800,
+      // Still clear as proof, but about half the upload of 1800px/82%.
+      imageQuality: 75,
+      maxWidth: 1280,
     );
     if (picked != null && mounted) setState(() => _image = picked);
   }
@@ -614,8 +620,16 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
           'ROOT CAUSE: shipment.assignee_id is missing. Current raw data keys: ${widget.task.raw.keys.join(", ")}');
     }
 
+    final watch = Stopwatch()..start();
+    final timings = <String>[];
+    void mark(String step) {
+      timings.add('$step ${watch.elapsedMilliseconds}ms');
+      watch.reset();
+    }
+
     setState(() {
       _submitting = true;
+      _step = 'جارٍ الإرسال إلى السيرفر…';
       _lastPayload = null;
       _lastStatusCode = null;
       _lastResponseBody = null;
@@ -649,6 +663,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
         longitude ??= widget.task.longitude;
         _diagnostics.setContext('GPS coordinates', 'Fallback: $latitude, $longitude ($error)');
       }
+      mark('gps');
       if (needsAddress && (latitude == null || longitude == null)) {
         throw const ScanApiException(
           'يلزم تحديد موقع السائق لحفظ العنوان الوطني في SLS.',
@@ -705,23 +720,47 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       );
       debugPrint('bulk/status HTTP status: 200');
       debugPrint('bulk/status response success: true');
-      _verifiedStatusOnServer = 'تم التأكيد بنجاح من سيرفر SLS';
+      mark('send');
 
       _diagnostics.setContext(
         'Image upload status',
         _image == null ? 'Not required/selected' : 'Uploaded',
       );
-      if (delivered) {
-        await DeliveryHistoryStore.instance.recordCompleted(
-          widget.task,
+      if (mounted) setState(() => _step = 'جارٍ التأكد من السيرفر…');
+
+      // Read the shipment back from the server (GET only) and check that it
+      // now has the status that was sent. The local history is saved at the
+      // same time so it does not add to the wait.
+      final results = await Future.wait<Object?>([
+        _verifyOnServer(
           awb: awb,
-        );
-      }
+          statusId: statusId,
+          delivered: delivered,
+          latitude: latitude,
+          longitude: longitude,
+        ),
+        if (delivered)
+          DeliveryHistoryStore.instance.recordCompleted(
+            widget.task,
+            awb: awb,
+          ),
+      ]);
+      final verified = results.first as bool;
+      mark('verify');
+      _diagnostics.setContext('Submit timings', timings.join(', '));
+      _verifiedStatusOnServer = verified
+          ? 'تم التأكيد من سيرفر SLS: الحالة الجديدة ظاهرة على الشحنة'
+          : 'أُرسلت الحالة وقبلها السيرفر، لكن لم تظهر بعد على الشحنة';
+
       widget.onUpdated?.call();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('تم تحديث الحالة وتأكيدها من السيرفر بنجاح.')),
+      final shipmentLabel = awb.isEmpty ? '' : ' $awb';
+      TopToast.show(
+        context,
+        verified
+            ? 'تم التأكيد من السيرفر ✓ $displayLabel$shipmentLabel'
+            : 'أُرسلت الحالة وقبلها السيرفر، لكنها لم تظهر بعد على الشحنة. تحقق منها بعد قليل قبل إعادة الإرسال.',
+        kind: verified ? TopToastKind.success : TopToastKind.warning,
       );
       Navigator.of(context).pop(true);
     } on ScanApiException catch (error) {
@@ -732,18 +771,72 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       _lastResponseBody = error.responseBody;
       _diagnostics.validation(error.toString());
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
-      );
+      TopToast.show(context, error.toString(), kind: TopToastKind.error);
     } catch (error) {
       _diagnostics.validation(error.toString());
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.toString())),
-      );
+      TopToast.show(context, error.toString(), kind: TopToastKind.error);
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      if (mounted) {
+        setState(() {
+          _submitting = false;
+          _step = null;
+        });
+      }
     }
+  }
+
+  /// True only when the server's own data shows the new status. Uses the
+  /// shipment lookup (orders/awb); if that cannot tell, the task list.
+  /// Both are read-only GET requests. Retries once, as the server may need
+  /// a moment to apply the update.
+  Future<bool> _verifyOnServer({
+    required String awb,
+    required Object statusId,
+    required bool delivered,
+    double? latitude,
+    double? longitude,
+  }) async {
+    Future<bool> check() async {
+      try {
+        final shipment = await _api.scanOrder(awb);
+        if (StatusVerification.matches(
+          shipment.raw,
+          sentStatusId: statusId,
+          delivered: delivered,
+        )) {
+          return true;
+        }
+      } catch (error) {
+        debugPrint('Verify via orders/awb failed: $error');
+      }
+      try {
+        final tasks = await _mainApi.fetchTasks(
+          widget.savedSession,
+          latitude: latitude,
+          longitude: longitude,
+        );
+        for (final task in tasks) {
+          final same = task.realAwb.trim() == awb ||
+              task.displayReference.trim() == awb;
+          if (same &&
+              StatusVerification.matches(
+                task.raw,
+                sentStatusId: statusId,
+                delivered: delivered,
+              )) {
+            return true;
+          }
+        }
+      } catch (error) {
+        debugPrint('Verify via tasks failed: $error');
+      }
+      return false;
+    }
+
+    if (await check()) return true;
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    return check();
   }
 
   Future<void> _openWhatsApp() async {
@@ -1025,7 +1118,9 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.check_circle_outline),
-                label: Text(_submitting ? 'جارٍ الإرسال...' : 'إرسال التحديث'),
+                label: Text(
+                  _submitting ? (_step ?? 'جارٍ الإرسال…') : 'إرسال التحديث',
+                ),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size(double.infinity, 56),
                 ),
