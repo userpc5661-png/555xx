@@ -747,7 +747,11 @@ class TaskCard extends StatelessWidget {
                       await _correctLocation(context);
                     }
                     if (value == 'location_sources' && context.mounted) {
-                      await showLocationSourcesSheet(context, task);
+                      await showLocationSourcesSheet(
+                        context,
+                        task,
+                        savedSession: savedSession,
+                      );
                     }
                   },
                   itemBuilder: (_) => const [
