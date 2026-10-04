@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../models/task_item.dart';
@@ -20,19 +21,33 @@ class CorrectedLocation {
       );
 }
 
+/// A local customer-location change. [location] is null when the driver
+/// restored the original server location.
+class LocationCorrectionChange {
+  final String shipmentKey;
+  final CorrectedLocation? location;
+  const LocationCorrectionChange(this.shipmentKey, this.location);
+}
+
 class LocationCorrectionService {
   LocationCorrectionService._();
 
   static const _storage = FlutterSecureStorage();
+
+  /// Emits every local save/restore so open screens (e.g. the map markers)
+  /// update immediately, without waiting for a server refresh.
+  static final ValueNotifier<LocationCorrectionChange?> changes =
+      ValueNotifier<LocationCorrectionChange?>(null);
+
   static String _safe(String value) =>
       value.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
 
-  static String _key(TaskItem task) {
-    final shipmentKey = task.realAwb.trim().isNotEmpty
-        ? task.realAwb.trim()
-        : task.displayReference.trim();
-    return 'shipment_location_v2_${_safe(AccountStore.currentAccountId)}_${_safe(shipmentKey)}';
-  }
+  static String shipmentKey(TaskItem task) => task.realAwb.trim().isNotEmpty
+      ? task.realAwb.trim()
+      : task.displayReference.trim();
+
+  static String _key(TaskItem task) =>
+      'shipment_location_v2_${_safe(AccountStore.currentAccountId)}_${_safe(shipmentKey(task))}';
 
   // Kept for a transparent one-time migration of locations saved by older
   // releases. Removing it would make existing driver corrections disappear.
@@ -49,7 +64,8 @@ class LocationCorrectionService {
         Map<String, dynamic>.from(jsonDecode(raw) as Map),
       );
       if (loadedFromLegacy) {
-        await save(task, value);
+        // Silent migration: it is not a driver edit, so no change event.
+        await _write(task, value);
       }
       return value;
     } catch (_) {
@@ -64,17 +80,22 @@ class LocationCorrectionService {
     return CorrectedLocation(task.latitude!, task.longitude!);
   }
 
+  static Future<void> _write(TaskItem task, CorrectedLocation value) =>
+      _storage.write(key: _key(task), value: jsonEncode(value.toJson()));
+
   static Future<void> save(TaskItem task, CorrectedLocation value) async {
-    await _storage.write(key: _key(task), value: jsonEncode(value.toJson()));
+    await _write(task, value);
     DeveloperDiagnosticsService.instance.setContext(
       'Local customer location',
       '${task.displayReference}: ${value.latitude}, ${value.longitude}',
     );
+    changes.value = LocationCorrectionChange(shipmentKey(task), value);
   }
 
   static Future<void> restore(TaskItem task) async {
     await _storage.delete(key: _key(task));
     await _storage.delete(key: _legacyKey(task));
+    changes.value = LocationCorrectionChange(shipmentKey(task), null);
   }
 
   static Future<CorrectedLocation?> parse(String input, {Dio? client}) async {

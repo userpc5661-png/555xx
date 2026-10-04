@@ -163,7 +163,10 @@ class _CollectionWalletScreenState extends State<CollectionWalletScreen> {
   @override
   Widget build(BuildContext context) {
     final currentByAwb = <String, TaskItem>{
-      for (final task in widget.tasks) task.displayReference: task,
+      for (final task in widget.tasks) ...{
+        task.displayReference: task,
+        if (task.realAwb.trim().isNotEmpty) task.realAwb.trim(): task,
+      },
     };
     final collectedHistory = _history
         .where((record) => record.collected)
@@ -174,6 +177,7 @@ class _CollectionWalletScreenState extends State<CollectionWalletScreen> {
         .where(
           (task) =>
               task.isCashOnDelivery &&
+              !collectedAwbs.contains(task.realAwb.trim()) &&
               !collectedAwbs.contains(task.displayReference),
         )
         .toList();
@@ -336,8 +340,8 @@ class _ServerStatsCard extends StatefulWidget {
 }
 
 class _ServerStatsCardState extends State<_ServerStatsCard> {
-  int _todayCount = 0;
-  int _monthCount = 0;
+  List<DeliveryHistoryRecord> _todayRecords = const [];
+  List<DeliveryHistoryRecord> _monthRecords = const [];
   bool _loading = true;
 
   @override
@@ -349,20 +353,16 @@ class _ServerStatsCardState extends State<_ServerStatsCard> {
   Future<void> _loadStats() async {
     final history = await DeliveryHistoryStore.instance.allRecords();
     final now = DateTime.now();
-    final todayCount = history.where((r) {
-      return r.timestamp.year == now.year &&
-          r.timestamp.month == now.month &&
-          r.timestamp.day == now.day;
-    }).length;
-
-    final monthCount = history.where((r) {
-      return r.timestamp.year == now.year && r.timestamp.month == now.month;
-    }).length;
+    final month = history
+        .where((r) =>
+            r.timestamp.year == now.year && r.timestamp.month == now.month)
+        .toList();
+    final today = month.where((r) => r.timestamp.day == now.day).toList();
 
     if (mounted) {
       setState(() {
-        _todayCount = todayCount;
-        _monthCount = monthCount;
+        _todayRecords = today;
+        _monthRecords = month;
         _loading = false;
       });
     }
@@ -373,7 +373,18 @@ class _ServerStatsCardState extends State<_ServerStatsCard> {
     final serverCompleted = widget.tasks
         .where((t) => t.progress == TaskProgress.completed)
         .length;
-    final totalDelivered = serverCompleted + _monthCount;
+    // A shipment delivered from this device is in the local history AND, once
+    // the server confirms it, in the current task list. Count it only once.
+    final currentAwbs = {
+      for (final task in widget.tasks) ...[
+        task.realAwb.trim(),
+        task.displayReference,
+      ],
+    };
+    int localOnly(List<DeliveryHistoryRecord> records) =>
+        records.where((r) => !currentAwbs.contains(r.awb)).length;
+    final todayDelivered = serverCompleted + localOnly(_todayRecords);
+    final totalDelivered = serverCompleted + localOnly(_monthRecords);
     final totalAssigned = widget.tasks.length;
 
     return Padding(
@@ -385,7 +396,7 @@ class _ServerStatsCardState extends State<_ServerStatsCard> {
             'إحصائيات الشحنات والتوصيل',
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
-          subtitle: Text('توصيل اليوم: ${serverCompleted + _todayCount} شحنة'),
+          subtitle: Text('توصيل اليوم: $todayDelivered شحنة'),
           children: [
             if (_loading)
               const Padding(
@@ -399,7 +410,7 @@ class _ServerStatsCardState extends State<_ServerStatsCard> {
                   children: [
                     _StatRow(
                       title: 'توصيل اليوم (السيرفر + المحلي)',
-                      value: '${serverCompleted + _todayCount}',
+                      value: '$todayDelivered',
                       icon: Icons.today_outlined,
                       color: Colors.green,
                     ),

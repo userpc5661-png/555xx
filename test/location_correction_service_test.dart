@@ -1,4 +1,6 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sls_assistant_pro/models/task_item.dart';
 import 'package:sls_assistant_pro/services/location_correction_service.dart';
 
 void main() {
@@ -50,6 +52,52 @@ void main() {
         await LocationCorrectionService.parse('copied-location-%'),
         isNull,
       );
+    });
+  });
+
+  group('LocationCorrectionService local changes', () {
+    setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
+    final task = TaskItem.fromJson({
+      'order_id': 7,
+      'order_awb': 'SLS-777',
+      'delivery_location_lat': '24.7',
+      'delivery_location_lng': '46.6',
+    });
+
+    test('save notifies listeners with the new location', () async {
+      final events = <LocationCorrectionChange?>[];
+      void listener() => events.add(LocationCorrectionService.changes.value);
+      LocationCorrectionService.changes.addListener(listener);
+      addTearDown(
+        () => LocationCorrectionService.changes.removeListener(listener),
+      );
+
+      await LocationCorrectionService.save(
+        task,
+        const CorrectedLocation(24.8, 46.7),
+      );
+      await LocationCorrectionService.restore(task);
+
+      expect(events, hasLength(2));
+      expect(events[0]!.shipmentKey, 'SLS-777');
+      expect(events[0]!.location!.latitude, 24.8);
+      expect(events[1]!.shipmentKey, 'SLS-777');
+      expect(events[1]!.location, isNull);
+    });
+
+    test('effective location prefers the local correction', () async {
+      await LocationCorrectionService.save(
+        task,
+        const CorrectedLocation(24.8, 46.7),
+      );
+      final effective = await LocationCorrectionService.effectiveLocation(task);
+      expect(effective!.latitude, 24.8);
+      expect(effective.longitude, 46.7);
+
+      await LocationCorrectionService.restore(task);
+      final original = await LocationCorrectionService.effectiveLocation(task);
+      expect(original!.latitude, 24.7);
     });
   });
 }

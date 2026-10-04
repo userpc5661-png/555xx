@@ -328,9 +328,13 @@ class _DashboardPageState extends State<_DashboardPage> {
     final serverCompleted = widget.tasks
         .where((task) => task.progress == TaskProgress.completed)
         .length;
-    final currentAwbs = widget.tasks
-        .map((task) => task.displayReference)
-        .toSet();
+    // History records are stored by realAwb (falling back to displayReference).
+    final currentAwbs = {
+      for (final task in widget.tasks) ...[
+        task.realAwb.trim(),
+        task.displayReference,
+      ],
+    };
     final localCompleted = _history
         .where((record) => !currentAwbs.contains(record.awb))
         .length;
@@ -1135,9 +1139,10 @@ class _MapPageState extends State<_MapPage> {
   bool _hasCenteredOnUser = false;
   String? _locationError;
   final Map<String, CorrectedLocation> _corrections = {};
+  int _correctionsGeneration = 0;
 
   String _correctionKey(TaskItem task) =>
-      task.realAwb.trim().isNotEmpty ? task.realAwb.trim() : task.displayReference.trim();
+      LocationCorrectionService.shipmentKey(task);
 
   Future<void> _loadMapContactData() async {
     final data = await LocalContactStore.instance.getAll();
@@ -1150,17 +1155,45 @@ class _MapPageState extends State<_MapPage> {
   }
 
   Future<void> _loadCorrections() async {
-    final loaded = <String, CorrectedLocation>{};
-    for (final task in widget.tasks) {
-      final correction = await LocationCorrectionService.load(task);
-      if (correction != null) loaded[_correctionKey(task)] = correction;
-    }
-    if (!mounted) return;
+    // A newer load or a local edit supersedes this one; dropping its result
+    // keeps a slow, older read from putting a marker back at its old place.
+    final generation = ++_correctionsGeneration;
+    final tasks = widget.tasks;
+    final results = await Future.wait(tasks.map(LocationCorrectionService.load));
+    final loaded = <String, CorrectedLocation>{
+      for (var i = 0; i < tasks.length; i++)
+        if (results[i] case final correction?)
+          _correctionKey(tasks[i]): correction,
+    };
+    if (!mounted || generation != _correctionsGeneration) return;
     setState(() {
       _corrections
         ..clear()
         ..addAll(loaded);
     });
+  }
+
+  void _onCorrectionChanged() {
+    final change = LocationCorrectionService.changes.value;
+    if (change == null || !mounted) return;
+    _correctionsGeneration++;
+    setState(() {
+      final location = change.location;
+      if (location == null) {
+        _corrections.remove(change.shipmentKey);
+      } else {
+        _corrections[change.shipmentKey] = location;
+      }
+    });
+  }
+
+  /// Latest copy of [task] after a refresh, so open sheets show fresh data.
+  TaskItem _currentTask(TaskItem task) {
+    final key = '${task.referenceNumber}_${task.id}';
+    for (final current in widget.tasks) {
+      if ('${current.referenceNumber}_${current.id}' == key) return current;
+    }
+    return task;
   }
 
   CorrectedLocation? _effectiveLocation(TaskItem task) {
@@ -1173,6 +1206,7 @@ class _MapPageState extends State<_MapPage> {
   @override
   void initState() {
     super.initState();
+    LocationCorrectionService.changes.addListener(_onCorrectionChanged);
     _loadCorrections();
     _loadMapContactData();
     _loadLocalStatuses();
@@ -1204,6 +1238,7 @@ class _MapPageState extends State<_MapPage> {
 
   @override
   void dispose() {
+    LocationCorrectionService.changes.removeListener(_onCorrectionChanged);
     _positionSubscription?.cancel();
     _compassSubscription?.cancel();
     super.dispose();
@@ -1556,7 +1591,7 @@ class _MapPageState extends State<_MapPage> {
                     padding: const EdgeInsets.only(bottom: 24),
                     itemCount: clusterTasks.length,
                     itemBuilder: (context, index) {
-                      final task = clusterTasks[index];
+                      final task = _currentTask(clusterTasks[index]);
                       final storageKey = '${task.referenceNumber}_${task.id}';
                       return TaskCard(
                         task: task,
@@ -1567,7 +1602,7 @@ class _MapPageState extends State<_MapPage> {
                           await _loadMapContactData();
                           await _loadCorrections();
                           if (mounted) setState(() {});
-                          setSheetState(() {});
+                          if (context.mounted) setSheetState(() {});
                         },
                         contactController: widget.contactController,
                         contactData: _contactData[storageKey],
@@ -1578,7 +1613,7 @@ class _MapPageState extends State<_MapPage> {
                           await _loadMapContactData();
                           await _loadCorrections();
                           if (mounted) setState(() {});
-                          setSheetState(() {});
+                          if (context.mounted) setSheetState(() {});
                         },
                       );
                     },
