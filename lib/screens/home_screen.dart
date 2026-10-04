@@ -8,10 +8,12 @@ import 'package:geolocator/geolocator.dart';
 import 'package:maplibre/maplibre.dart' as ml;
 import '../models/task_item.dart';
 import '../services/api_service.dart';
+import '../services/map_focus_service.dart';
 import '../services/navigation_service.dart';
 import '../services/location_correction_service.dart';
 import '../services/token_store.dart';
 import '../theme/theme_controller.dart';
+import '../widgets/location_correction_dialog.dart';
 import '../widgets/task_card.dart';
 import '../services/local_contact_controller.dart';
 import '../services/local_contact_store.dart';
@@ -57,11 +59,17 @@ class _HomeScreenState extends State<HomeScreen> {
         if (mounted) setState(() {});
       },
     );
+    MapFocusService.requests.addListener(_onMapFocusRequest);
     _loadTasks();
+  }
+
+  void _onMapFocusRequest() {
+    if (MapFocusService.requests.value != null) _setIndex(2);
   }
 
   @override
   void dispose() {
+    MapFocusService.requests.removeListener(_onMapFocusRequest);
     _contactController.dispose();
     super.dispose();
   }
@@ -1141,6 +1149,10 @@ class _MapPageState extends State<_MapPage> {
   final Map<String, CorrectedLocation> _corrections = {};
   int _correctionsGeneration = 0;
 
+  /// Shipment the driver asked to see from a task card. While set, the
+  /// camera stays on it instead of jumping back to the driver's GPS.
+  TaskItem? _focusedTask;
+
   String _correctionKey(TaskItem task) =>
       LocationCorrectionService.shipmentKey(task);
 
@@ -1177,14 +1189,76 @@ class _MapPageState extends State<_MapPage> {
     final change = LocationCorrectionService.changes.value;
     if (change == null || !mounted) return;
     _correctionsGeneration++;
+    final location = change.location;
     setState(() {
-      final location = change.location;
       if (location == null) {
         _corrections.remove(change.shipmentKey);
       } else {
         _corrections[change.shipmentKey] = location;
+        _followUser = false;
       }
     });
+    if (location != null) _showPointOnMap(location);
+  }
+
+  /// Moves the camera to a customer pin, e.g. right after the driver
+  /// corrected its location, so the new position is visible immediately.
+  void _showPointOnMap(CorrectedLocation location) {
+    final controller = _mapController;
+    if (!_mapReady || controller == null) return;
+    unawaited(
+      controller
+          .animateCamera(
+            center: ml.Geographic(
+              lon: location.longitude,
+              lat: location.latitude,
+            ),
+            zoom: 17,
+            nativeDuration: const Duration(milliseconds: 500),
+          )
+          .catchError((_) {}),
+    );
+  }
+
+  void _onMapFocusRequest() {
+    final request = MapFocusService.requests.value;
+    if (request == null || !mounted) return;
+    _focusedTask = request.task;
+    _followUser = false;
+    // Let the tab switch rebuild first, then move the camera.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyFocus());
+  }
+
+  Future<void> _applyFocus() async {
+    final task = _focusedTask;
+    if (task == null || !mounted) return;
+    final location = _effectiveLocation(task) ??
+        await LocationCorrectionService.effectiveLocation(task);
+    if (!mounted || _focusedTask != task) return;
+    if (location == null) {
+      _focusedTask = null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('لا توجد إحداثيات لهذه الشحنة'),
+          action: SnackBarAction(
+            label: 'تحديد الموقع',
+            onPressed: () => _correctTaskLocation(task),
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() => _followUser = false);
+    // If the map is not created yet, onMapCreated applies the focus.
+    _showPointOnMap(location);
+  }
+
+  Future<void> _correctTaskLocation(TaskItem task) async {
+    final changed = await showLocationCorrectionDialog(context, task);
+    if (!changed || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تم تحديث موقع العميل محليًا على الخريطة')),
+    );
   }
 
   /// Latest copy of [task] after a refresh, so open sheets show fresh data.
@@ -1207,6 +1281,7 @@ class _MapPageState extends State<_MapPage> {
   void initState() {
     super.initState();
     LocationCorrectionService.changes.addListener(_onCorrectionChanged);
+    MapFocusService.requests.addListener(_onMapFocusRequest);
     _loadCorrections();
     _loadMapContactData();
     _loadLocalStatuses();
@@ -1228,6 +1303,7 @@ class _MapPageState extends State<_MapPage> {
     if (!oldWidget.active && widget.active) {
       _startLiveLocation();
     } else if (oldWidget.active && !widget.active) {
+      _focusedTask = null;
       _positionSubscription?.cancel();
       _positionSubscription = null;
       _compassSubscription?.cancel();
@@ -1239,6 +1315,7 @@ class _MapPageState extends State<_MapPage> {
   @override
   void dispose() {
     LocationCorrectionService.changes.removeListener(_onCorrectionChanged);
+    MapFocusService.requests.removeListener(_onMapFocusRequest);
     _positionSubscription?.cancel();
     _compassSubscription?.cancel();
     super.dispose();
@@ -1252,7 +1329,7 @@ class _MapPageState extends State<_MapPage> {
     if (mounted) {
       setState(() {
         _locating = true;
-        _followUser = true;
+        _followUser = _focusedTask == null;
         _locationError = null;
       });
     }
@@ -1470,6 +1547,7 @@ class _MapPageState extends State<_MapPage> {
   }
 
   Future<void> _centerOnUser() async {
+    _focusedTask = null;
     final position = _currentPosition;
     if (position == null) {
       await _startLiveLocation();
@@ -1753,9 +1831,14 @@ class _MapPageState extends State<_MapPage> {
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      trailing: task.address.isEmpty
-                          ? null
-                          : const Icon(Icons.open_in_new),
+                      trailing: IconButton(
+                        tooltip: 'تحديد الموقع',
+                        icon: const Icon(Icons.edit_location_alt_rounded),
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await _correctTaskLocation(task);
+                        },
+                      ),
                       onTap: task.address.isEmpty
                           ? null
                           : () => _openTask(task),
@@ -1841,14 +1924,16 @@ class _MapPageState extends State<_MapPage> {
             _contactData['${t.referenceNumber}_${t.id}']?.status == 'no_answer',
       );
 
+      final isCorrected = clusterTasks.any(
+        (t) => _corrections.containsKey(_correctionKey(t)),
+      );
+
       Color markerColor;
       if (hasAnswered && !hasNoAnswer) {
         markerColor = Colors.green;
       } else if (hasNoAnswer) {
         markerColor = Colors.red;
-      } else if (clusterTasks.any(
-        (t) => _corrections.containsKey(_correctionKey(t)),
-      )) {
+      } else if (isCorrected) {
         markerColor = Colors.purple;
       } else if (clusterTasks.any(
         (t) => t.paymentKind == PaymentKind.cashOnDelivery,
@@ -1869,11 +1954,19 @@ class _MapPageState extends State<_MapPage> {
                 : firstTask.displayReference,
             child: GestureDetector(
               onTap: () => _showTask(firstTask),
-              child: Icon(
-                Icons.location_pin,
-                size: 46,
-                color: markerColor,
-                shadows: const [Shadow(blurRadius: 3, color: Colors.black45)],
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(
+                    Icons.location_pin,
+                    size: 46,
+                    color: markerColor,
+                    shadows: const [
+                      Shadow(blurRadius: 3, color: Colors.black45),
+                    ],
+                  ),
+                  if (isCorrected) const _CorrectedBadge(),
+                ],
               ),
             ),
           ),
@@ -1898,6 +1991,7 @@ class _MapPageState extends State<_MapPage> {
                   color: markerColor,
                   shadows: const [Shadow(blurRadius: 4, color: Colors.black45)],
                 ),
+                if (isCorrected) const _CorrectedBadge(),
                 Positioned(
                   top: 5,
                   child: Container(
@@ -2086,7 +2180,9 @@ class _MapPageState extends State<_MapPage> {
                   onMapCreated: (controller) {
                     _mapController = controller;
                     _mapReady = true;
-                    if (_currentPosition != null) {
+                    if (_focusedTask != null) {
+                      _applyFocus();
+                    } else if (_currentPosition != null) {
                       _centerOnUser();
                     } else if (located.isNotEmpty) {
                       Future<void>.delayed(
@@ -2159,6 +2255,24 @@ class _MapPageState extends State<_MapPage> {
                             onPressed: _startLiveLocation,
                             child: const Text('إعادة'),
                           ),
+                        IconButton(
+                          tooltip: 'دليل ألوان الخريطة',
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.info_outline_rounded),
+                          onPressed: () => showDialog<void>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('دليل الخريطة'),
+                              content: const _MapLegend(),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('حسناً'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -2272,6 +2386,86 @@ class _MapPageState extends State<_MapPage> {
       ],
     );
   }
+}
+
+/// Small marker badge: this customer's location was corrected on this device.
+class _CorrectedBadge extends StatelessWidget {
+  const _CorrectedBadge();
+
+  @override
+  Widget build(BuildContext context) => Positioned(
+    top: 0,
+    right: 0,
+    child: Container(
+      padding: const EdgeInsets.all(2),
+      decoration: const BoxDecoration(
+        color: Colors.purple,
+        shape: BoxShape.circle,
+        boxShadow: [BoxShadow(color: Colors.black38, blurRadius: 2)],
+      ),
+      child: const Icon(Icons.edit_location_alt, size: 11, color: Colors.white),
+    ),
+  );
+}
+
+class _MapLegend extends StatelessWidget {
+  const _MapLegend();
+
+  static const _items = <(Color, String)>[
+    (Colors.green, 'تم الرد'),
+    (Colors.red, 'لم يرد'),
+    (Colors.purple, 'موقع معدّل محليًا'),
+    (Colors.orange, 'دفع عند الاستلام'),
+    (Colors.blue, 'مدفوعة مسبقًا'),
+  ];
+
+  @override
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      for (final (color, label) in _items)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Icon(Icons.location_pin, color: color),
+              const SizedBox(width: 8),
+              Text(label),
+            ],
+          ),
+        ),
+      const SizedBox(height: 4),
+      const Row(
+        children: [
+          _CorrectedLegendIcon(),
+          SizedBox(width: 8),
+          Expanded(child: Text('شارة: الموقع معدّل على هذا الجهاز')),
+        ],
+      ),
+      const SizedBox(height: 4),
+      const Text(
+        'الرقم على الدبوس = عدد الشحنات في نفس الموقع.',
+        style: TextStyle(color: Colors.grey, fontSize: 12),
+      ),
+    ],
+  );
+}
+
+class _CorrectedLegendIcon extends StatelessWidget {
+  const _CorrectedLegendIcon();
+
+  @override
+  Widget build(BuildContext context) => const SizedBox(
+    width: 24,
+    height: 24,
+    child: Stack(
+      children: [
+        Icon(Icons.location_pin, color: Colors.grey),
+        _CorrectedBadge(),
+      ],
+    ),
+  );
 }
 
 class _ScannerTab extends StatelessWidget {

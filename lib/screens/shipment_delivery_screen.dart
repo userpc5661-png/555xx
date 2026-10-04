@@ -29,6 +29,16 @@ class ShipmentDeliveryScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _navigate(BuildContext context) async {
+    final opened = await NavigationService.openTask(task);
+    if (opened || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('لا يوجد موقع لهذه الشحنة، صحّح الموقع أولاً'),
+      ),
+    );
+  }
+
   Future<void> _correctLocation(BuildContext context) async {
     final changed = await showLocationCorrectionDialog(context, task);
     if (!context.mounted || !changed) return;
@@ -109,9 +119,9 @@ class ShipmentDeliveryScreen extends StatelessWidget {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: task.hasNavigableLocation
-                        ? () => NavigationService.openTask(task)
-                        : null,
+                    // Enabled even without server coordinates: a location
+                    // corrected on this device is enough to navigate.
+                    onPressed: () => _navigate(context),
                     icon: const Icon(Icons.navigation_rounded),
                     label: const Text('ملاحة'),
                   ),

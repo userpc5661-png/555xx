@@ -1,11 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../models/task_item.dart';
 import '../services/location_correction_service.dart';
+import '../services/navigation_service.dart';
+
+String _format(CorrectedLocation location) =>
+    '${location.latitude.toStringAsFixed(7)}, ${location.longitude.toStringAsFixed(7)}';
 
 Future<bool> _confirmLocation(
   BuildContext context,
   CorrectedLocation location,
+  String label,
 ) async {
   final result = await showDialog<bool>(
     context: context,
@@ -18,10 +25,17 @@ Future<bool> _confirmLocation(
           const Text('تم استخراج الإحداثيات التالية:'),
           const SizedBox(height: 12),
           SelectableText(
-            '${location.latitude.toStringAsFixed(7)}, ${location.longitude.toStringAsFixed(7)}',
+            _format(location),
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: () =>
+                NavigationService.openLocation(location, label: label),
+            icon: const Icon(Icons.map_outlined),
+            label: const Text('معاينة في الخرائط'),
+          ),
+          const SizedBox(height: 4),
           const Text(
             'سيُحفظ الموقع على هذا الجهاز فقط ولن تتغير بيانات SLS.',
             style: TextStyle(color: Colors.grey, fontSize: 12),
@@ -43,91 +57,192 @@ Future<bool> _confirmLocation(
   return result ?? false;
 }
 
+/// Lets the driver override the customer's location on this device only.
+/// Returns true when the location was saved or restored.
 Future<bool> showLocationCorrectionDialog(
   BuildContext context,
   TaskItem task,
 ) async {
-  final controller = TextEditingController();
-  var loading = false;
   final existing = await LocationCorrectionService.load(task);
   if (!context.mounted) return false;
   final result = await showDialog<bool>(
     context: context,
-    barrierDismissible: !loading,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (context, setState) => AlertDialog(
+    builder: (_) => _LocationCorrectionDialog(task: task, existing: existing),
+  );
+  return result ?? false;
+}
+
+class _LocationCorrectionDialog extends StatefulWidget {
+  final TaskItem task;
+  final CorrectedLocation? existing;
+
+  const _LocationCorrectionDialog({required this.task, this.existing});
+
+  @override
+  State<_LocationCorrectionDialog> createState() =>
+      _LocationCorrectionDialogState();
+}
+
+class _LocationCorrectionDialogState extends State<_LocationCorrectionDialog> {
+  // Owned by the State so it is disposed only after the dialog's closing
+  // animation, never while the TextField is still on screen.
+  final _controller = TextEditingController();
+  bool _loading = false;
+  String? _error;
+
+  String get _label => widget.task.customerName.trim().isNotEmpty
+      ? widget.task.customerName.trim()
+      : widget.task.displayReference;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty || !mounted) return;
+    setState(() {
+      _controller.text = text;
+      _error = null;
+    });
+  }
+
+  Future<CorrectedLocation?> _currentPosition() async {
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      throw 'خدمة الموقع متوقفة، فعّل GPS ثم أعد المحاولة.';
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      throw 'لا توجد صلاحية للوصول إلى الموقع.';
+    }
+    final position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.best,
+        timeLimit: Duration(seconds: 15),
+      ),
+    );
+    return CorrectedLocation(position.latitude, position.longitude);
+  }
+
+  Future<void> _resolveAndSave({required bool useCurrentPosition}) async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    CorrectedLocation? value;
+    try {
+      value = useCurrentPosition
+          ? await _currentPosition()
+          : await LocationCorrectionService.parse(_controller.text);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error is String ? error : 'تعذر تحديد موقعك الحالي.';
+      });
+      return;
+    }
+    if (!mounted) return;
+    if (value == null) {
+      setState(() {
+        _loading = false;
+        _error =
+            'تعذر استخراج الإحداثيات من الرابط، أدخل خط العرض وخط الطول يدويًا';
+      });
+      return;
+    }
+    setState(() => _loading = false);
+    final confirmed = await _confirmLocation(context, value, _label);
+    if (!confirmed || !mounted) return;
+    setState(() => _loading = true);
+    await LocationCorrectionService.save(widget.task, value);
+    if (mounted) Navigator.pop(context, true);
+  }
+
+  Future<void> _restore() async {
+    setState(() => _loading = true);
+    await LocationCorrectionService.restore(widget.task);
+    if (mounted) Navigator.pop(context, true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final existing = widget.existing;
+    return PopScope(
+      canPop: !_loading,
+      child: AlertDialog(
         title: const Text('تصحيح موقع العميل'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              enabled: !loading,
-              keyboardType: TextInputType.url,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'ألصق رابط Google Maps أو الإحداثيات',
-                hintText: '24.7136, 46.6753',
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (existing != null) ...[
+                Text(
+                  'الموقع المعدّل حاليًا: ${_format(existing)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+              ],
+              TextField(
+                controller: _controller,
+                enabled: !_loading,
+                keyboardType: TextInputType.url,
+                maxLines: 3,
+                minLines: 1,
+                decoration: InputDecoration(
+                  labelText: 'ألصق رابط Google Maps أو الإحداثيات',
+                  hintText: '24.7136, 46.6753',
+                  errorText: _error,
+                  errorMaxLines: 3,
+                  suffixIcon: IconButton(
+                    tooltip: 'لصق',
+                    onPressed: _loading ? null : _paste,
+                    icon: const Icon(Icons.content_paste_rounded),
+                  ),
+                ),
               ),
-            ),
-            if (loading)
-              const Padding(
-                padding: EdgeInsets.only(top: 16),
-                child: CircularProgressIndicator(),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _loading
+                    ? null
+                    : () => _resolveAndSave(useCurrentPosition: true),
+                icon: const Icon(Icons.my_location_rounded),
+                label: const Text('استخدام موقعي الحالي'),
               ),
-          ],
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.only(top: 16),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: loading ? null : () => Navigator.pop(context, false),
+            onPressed: _loading ? null : () => Navigator.pop(context, false),
             child: const Text('إلغاء'),
           ),
           if (existing != null)
             TextButton(
-              onPressed: loading
-                  ? null
-                  : () async {
-                      await LocationCorrectionService.restore(task);
-                      if (context.mounted) Navigator.pop(context, true);
-                    },
+              onPressed: _loading ? null : _restore,
               child: const Text('الرجوع للموقع الأصلي'),
             ),
           FilledButton(
-            onPressed: loading
+            onPressed: _loading
                 ? null
-                : () async {
-                    setState(() => loading = true);
-                    final value = await LocationCorrectionService.parse(
-                      controller.text,
-                    );
-                    if (!context.mounted) return;
-                    if (value == null) {
-                      setState(() => loading = false);
-                      ScaffoldMessenger.of(dialogContext).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'تعذر استخراج الإحداثيات من الرابط، أدخل خط العرض وخط الطول يدويًا',
-                          ),
-                        ),
-                      );
-                      return;
-                    }
-                    setState(() => loading = false);
-                    final confirmed = await _confirmLocation(
-                      dialogContext,
-                      value,
-                    );
-                    if (!confirmed || !dialogContext.mounted) return;
-                    setState(() => loading = true);
-                    await LocationCorrectionService.save(task, value);
-                    if (context.mounted) Navigator.pop(context, true);
-                  },
+                : () => _resolveAndSave(useCurrentPosition: false),
             child: const Text('حفظ الموقع'),
           ),
         ],
       ),
-    ),
-  );
-  controller.dispose();
-  return result ?? false;
+    );
+  }
 }

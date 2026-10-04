@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/scan_models.dart';
 import '../models/task_item.dart';
+import '../services/map_focus_service.dart';
 import '../services/navigation_service.dart';
 import '../screens/shipment_status_screen.dart';
 import '../screens/scanner_screen.dart';
@@ -13,6 +14,7 @@ import '../services/local_contact_controller.dart';
 import '../services/local_contact_store.dart';
 import '../services/local_shipment_status_store.dart';
 import '../utils/phone_number_utils.dart';
+import 'location_correction_dialog.dart';
 
 class TaskCard extends StatelessWidget {
   final TaskItem task;
@@ -124,6 +126,20 @@ class TaskCard extends StatelessWidget {
         const SnackBar(content: Text('تعذر فتح الخرائط أو لا يوجد موقع متاح')),
       );
     }
+  }
+
+  void _showOnAppMap(BuildContext context) {
+    // Close any sheet/route this card sits in so the map is visible.
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    MapFocusService.show(task);
+  }
+
+  Future<void> _correctLocation(BuildContext context) async {
+    final changed = await showLocationCorrectionDialog(context, task);
+    if (!changed || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تم تحديث موقع العميل محليًا')),
+    );
   }
 
   Future<void> _copyReference(BuildContext context) async {
@@ -708,6 +724,7 @@ class TaskCard extends StatelessWidget {
                 IconButton.filledTonal(
                   onPressed: () => _openLocation(context),
                   icon: const Icon(Icons.navigation_rounded),
+                  tooltip: 'فتح الموقع في الخرائط',
                 ),
                 IconButton.filledTonal(
                   onPressed: () => _openWhatsApp(context),
@@ -722,8 +739,32 @@ class TaskCard extends StatelessWidget {
                     if (value == 'local_status' && context.mounted) {
                       await _openLocalStatusDialog(context);
                     }
+                    if (value == 'show_on_map' && context.mounted) {
+                      _showOnAppMap(context);
+                    }
+                    if (value == 'correct_location' && context.mounted) {
+                      await _correctLocation(context);
+                    }
                   },
                   itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'show_on_map',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.map_outlined),
+                        title: Text('عرض على خريطة التطبيق'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'correct_location',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.edit_location_alt_outlined),
+                        title: Text('تصحيح موقع العميل'),
+                      ),
+                    ),
                     PopupMenuItem(
                       value: 'sms',
                       child: ListTile(

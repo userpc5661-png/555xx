@@ -156,17 +156,21 @@ class LocationCorrectionService {
       // Keep parsing the original input when a copied URL contains an
       // incomplete percent escape instead of failing the correction dialog.
     }
+    // Most precise first: in a Google Maps place URL "!3d…!4d…" is the pin
+    // itself, while "@lat,lng" is only the camera centre and can be hundreds
+    // of metres away from the customer.
     final patterns = <RegExp>[
-      RegExp(r'@(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)'),
       RegExp(
         r'!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)',
         caseSensitive: false,
       ),
       RegExp(
-        r'(?:[?&](?:q|query|destination|center|ll)=)(-?\d{1,2}(?:\.\d+)?)(?:%2C|,|\s+)(-?\d{1,3}(?:\.\d+)?)',
+        r'(?:[?&](?:q|query|destination|daddr|center|ll)=)(?:loc:)?(-?\d{1,2}(?:\.\d+)?)(?:%2C|,|\s+|\+)+(-?\d{1,3}(?:\.\d+)?)',
         caseSensitive: false,
       ),
-      RegExp(r'(?<!\d)(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)(?!\d)'),
+      RegExp(r'/maps/(?:search|dir|place)/(?:[^/]*/)?(-?\d{1,2}(?:\.\d+)?),\s*\+?(-?\d{1,3}(?:\.\d+)?)'),
+      RegExp(r'@(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)'),
+      RegExp(r'(?<!\d)(-?\d{1,2}(?:\.\d+)?)\s*,\s*\+?(-?\d{1,3}(?:\.\d+)?)(?!\d)'),
     ];
     for (final pattern in patterns) {
       final match = pattern.firstMatch(decoded);

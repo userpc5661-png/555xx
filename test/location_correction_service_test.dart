@@ -43,6 +43,22 @@ void main() {
       expect(waze?.longitude, 46.6753);
     });
 
+    test('prefers the place pin over the camera centre', () async {
+      final value = await LocationCorrectionService.parse(
+        'https://www.google.com/maps/place/Home/@24.7000,46.6000,15z/data=!4m6!3m5!1s0x0:0x0!8m2!3d24.7136!4d46.6753',
+      );
+      expect(value?.latitude, 24.7136);
+      expect(value?.longitude, 46.6753);
+    });
+
+    test('parses Google Maps search paths with a plus sign', () async {
+      final value = await LocationCorrectionService.parse(
+        'https://www.google.com/maps/search/24.7136,+46.6753?entry=tts',
+      );
+      expect(value?.latitude, 24.7136);
+      expect(value?.longitude, 46.6753);
+    });
+
     test('rejects invalid coordinates', () async {
       expect(await LocationCorrectionService.parse('999, 999'), isNull);
     });
