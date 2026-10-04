@@ -14,6 +14,7 @@ import '../services/phone_action_service.dart';
 import '../services/scan_api_service.dart';
 import '../services/softpos_service.dart';
 import '../services/whatsapp_action_service.dart';
+import '../utils/national_address_utils.dart';
 import '../widgets/location_correction_dialog.dart';
 import 'scanner_screen.dart';
 
@@ -542,10 +543,26 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
         _requiresAttachment(selected);
     final needsReschedule = _requiresReschedule(displayLabel) ||
         _requiresReschedule(label);
-    final address = _nationalAddress.text.trim();
+    // The official SLS app takes the short address (e.g. RRRD2929); send it
+    // in that exact form so the server can match it.
+    final address = needsAddress
+        ? NationalAddressUtils.normalize(_nationalAddress.text)
+        : _nationalAddress.text.trim();
 
     if (needsAddress && address.isEmpty) {
       _validation('أدخل العنوان الوطني الجديد للعميل.');
+      return;
+    }
+    if (needsAddress && !NationalAddressUtils.isValidShortAddress(address)) {
+      _validation(
+        'أدخل العنوان الوطني المختصر: 4 حروف إنجليزية ثم 4 أرقام، مثل RRRD2929.',
+      );
+      return;
+    }
+    if (needsAddress &&
+        NationalAddressUtils.shortAddressesIn(widget.task.raw)
+            .contains(address)) {
+      _validation('لا تستطيع اختيار نفس العنوان الوطني الموجود حالياً.');
       return;
     }
     if (needsAttachment && _image == null) {
@@ -931,9 +948,13 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                 TextField(
                   controller: _nationalAddress,
                   enabled: !_submitting,
+                  textCapitalization: TextCapitalization.characters,
+                  keyboardType: TextInputType.visiblePassword,
+                  autocorrect: false,
                   decoration: const InputDecoration(
-                    labelText: 'العنوان الوطني الجديد',
-                    hintText: 'العنوان الذي سيُحفظ رسميًا في SLS',
+                    labelText: 'العنوان الوطني المختصر الجديد',
+                    hintText: 'مثال: RRRD2929',
+                    helperText: '4 حروف إنجليزية ثم 4 أرقام',
                   ),
                 ),
               ],
