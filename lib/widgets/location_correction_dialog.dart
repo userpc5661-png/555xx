@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../models/task_item.dart';
+import '../screens/label_qr_scan_screen.dart';
 import '../services/location_correction_service.dart';
 import '../services/navigation_service.dart';
 
@@ -131,7 +132,21 @@ class _LocationCorrectionDialogState extends State<_LocationCorrectionDialog> {
     return CorrectedLocation(position.latitude, position.longitude);
   }
 
-  Future<void> _resolveAndSave({required bool useCurrentPosition}) async {
+  Future<void> _scanLabel() async {
+    final scanned = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const LabelQrScanScreen()),
+    );
+    if (scanned == null || scanned.isEmpty || !mounted) return;
+    // Show what the QR holds, then read the location from it like a pasted
+    // link; if it has no location, the error explains that.
+    setState(() => _controller.text = scanned);
+    await _resolveAndSave(useCurrentPosition: false, fromLabel: true);
+  }
+
+  Future<void> _resolveAndSave({
+    required bool useCurrentPosition,
+    bool fromLabel = false,
+  }) async {
     setState(() {
       _loading = true;
       _error = null;
@@ -153,8 +168,9 @@ class _LocationCorrectionDialogState extends State<_LocationCorrectionDialog> {
     if (value == null) {
       setState(() {
         _loading = false;
-        _error =
-            'تعذر استخراج الإحداثيات من الرابط، أدخل خط العرض وخط الطول يدويًا';
+        _error = fromLabel
+            ? 'رمز QR هذا لا يحتوي على موقع (محتواه ظاهر في الحقل).'
+            : 'تعذر استخراج الإحداثيات من الرابط، أدخل خط العرض وخط الطول يدويًا';
       });
       return;
     }
@@ -210,6 +226,12 @@ class _LocationCorrectionDialogState extends State<_LocationCorrectionDialog> {
                 ),
               ),
               const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _loading ? null : _scanLabel,
+                icon: const Icon(Icons.qr_code_scanner_rounded),
+                label: const Text('مسح QR البوليصة'),
+              ),
+              const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: _loading
                     ? null
