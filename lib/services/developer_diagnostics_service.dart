@@ -11,6 +11,7 @@ class DiagnosticEntry {
   final Object? payload;
   final Object? response;
   final String? error;
+  final Duration? duration;
 
   const DiagnosticEntry({
     required this.timestamp,
@@ -20,7 +21,23 @@ class DiagnosticEntry {
     this.payload,
     this.response,
     this.error,
+    this.duration,
   });
+
+  /// The response as readable text: JSON strings are decoded and indented.
+  String get prettyResponse => DeveloperDiagnosticsService.pretty(response);
+  String get prettyPayload => DeveloperDiagnosticsService.pretty(payload);
+
+  String toReport() => [
+        '### $method ${statusCode ?? '-'}  $url',
+        'time: ${timestamp.toIso8601String()}'
+            '${duration == null ? '' : '  duration: ${duration!.inMilliseconds}ms'}',
+        '--- payload ---',
+        prettyPayload,
+        '--- response ---',
+        prettyResponse,
+        if (error != null) '--- error ---\n$error',
+      ].join('\n');
 }
 
 class DeveloperDiagnosticsService {
@@ -92,6 +109,22 @@ class DeveloperDiagnosticsService {
     return value;
   }
 
+  /// Masked, readable text. A JSON string (responses are fetched as plain
+  /// text) is decoded first so it is shown indented instead of escaped.
+  static String pretty(Object? value) {
+    if (value == null) return '<empty>';
+    Object? data = value;
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          data = jsonDecode(trimmed);
+        } catch (_) {}
+      }
+    }
+    return _safeText(data);
+  }
+
   static String _safeText(Object? value) {
     final masked = mask(value);
     if (masked is String) return masked;
@@ -106,6 +139,19 @@ class DeveloperDiagnosticsService {
 class _DiagnosticsInterceptor extends Interceptor {
   final DeveloperDiagnosticsService service;
   _DiagnosticsInterceptor(this.service);
+
+  static const _startKey = 'diagnostics_started_at';
+
+  @override
+  void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    options.extra[_startKey] = DateTime.now();
+    handler.next(options);
+  }
+
+  Duration? _elapsed(RequestOptions options) {
+    final started = options.extra[_startKey];
+    return started is DateTime ? DateTime.now().difference(started) : null;
+  }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
@@ -125,6 +171,7 @@ class _DiagnosticsInterceptor extends Interceptor {
         statusCode: response.statusCode,
         payload: safePayload,
         response: safeResponse,
+        duration: _elapsed(response.requestOptions),
       ),
     );
     handler.next(response);
@@ -150,6 +197,7 @@ class _DiagnosticsInterceptor extends Interceptor {
         payload: safePayload,
         response: safeResponse,
         error: error.message,
+        duration: _elapsed(error.requestOptions),
       ),
     );
     handler.next(error);

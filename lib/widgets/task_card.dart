@@ -16,6 +16,7 @@ import '../services/local_shipment_status_store.dart';
 import '../utils/phone_number_utils.dart';
 import 'location_correction_dialog.dart';
 import 'location_sources_sheet.dart';
+import 'shipment_raw_sheet.dart';
 
 class TaskCard extends StatelessWidget {
   final TaskItem task;
@@ -746,6 +747,9 @@ class TaskCard extends StatelessWidget {
                     if (value == 'correct_location' && context.mounted) {
                       await _correctLocation(context);
                     }
+                    if (value == 'raw_data' && context.mounted) {
+                      await showShipmentRawSheet(context, task);
+                    }
                     if (value == 'location_sources' && context.mounted) {
                       await showLocationSourcesSheet(
                         context,
@@ -762,6 +766,15 @@ class TaskCard extends StatelessWidget {
                         contentPadding: EdgeInsets.zero,
                         leading: Icon(Icons.map_outlined),
                         title: Text('عرض على خريطة التطبيق'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'raw_data',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.data_object_rounded),
+                        title: Text('بيانات الشحنة من السيرفر'),
                       ),
                     ),
                     PopupMenuItem(
