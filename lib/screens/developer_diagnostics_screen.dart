@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../services/developer_diagnostics_service.dart';
 
@@ -10,7 +10,6 @@ class DeveloperDiagnosticsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    assert(kDebugMode, 'Developer diagnostics are debug-only.');
     final service = DeveloperDiagnosticsService.instance;
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -18,6 +17,21 @@ class DeveloperDiagnosticsScreen extends StatelessWidget {
         appBar: AppBar(
           title: const Text('تشخيص المطوّر'),
           actions: [
+            IconButton(
+              onPressed: () async {
+                final text = [
+                  for (final item in service.context.value.entries)
+                    '## ${item.key}\n${item.value}',
+                ].join('\n\n');
+                await Clipboard.setData(ClipboardData(text: text));
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('تم نسخ الملخص')),
+                );
+              },
+              icon: const Icon(Icons.copy_all_rounded),
+              tooltip: 'نسخ الملخص',
+            ),
             IconButton(
               onPressed: service.clear,
               icon: const Icon(Icons.delete_sweep_outlined),
@@ -37,8 +51,8 @@ class DeveloperDiagnosticsScreen extends StatelessWidget {
                     child: Padding(
                       padding: EdgeInsets.all(12),
                       child: Text(
-                        'هذه الشاشة متاحة في وضع Debug فقط. التوكنات والكوكي '
-                        'وكلمات المرور تُخفى تلقائيًا.',
+                        'التوكنات والكوكي وكلمات المرور تُخفى تلقائيًا. '
+                        'زر النسخ بالأعلى ينسخ الملخصات فقط (بدون الطلبات).',
                       ),
                     ),
                   ),

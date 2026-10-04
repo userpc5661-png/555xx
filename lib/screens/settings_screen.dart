@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/task_item.dart';
@@ -113,11 +112,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title: Text(dark ? 'الوضع الفاتح' : 'الوضع الداكن'),
               onTap: () => ThemeController.instance.toggle(context),
             ),
-            if (kDebugMode)
-              ListTile(
+            ListTile(
                 leading: const Icon(Icons.developer_mode),
                 title: const Text('تشخيص المطوّر'),
-                subtitle: const Text('متاح في وضع Debug فقط'),
+                subtitle: const Text('طلبات السيرفر وملخص المهام وأوقات الإرسال'),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const DeveloperDiagnosticsScreen(),

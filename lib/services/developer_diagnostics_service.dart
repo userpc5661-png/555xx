@@ -33,15 +33,13 @@ class DeveloperDiagnosticsService {
       ValueNotifier<Map<String, String>>(const {});
 
   void attach(Dio dio) {
-    if (!kDebugMode ||
-        dio.interceptors.any((item) => item is _DiagnosticsInterceptor)) {
+    if (dio.interceptors.any((item) => item is _DiagnosticsInterceptor)) {
       return;
     }
     dio.interceptors.add(_DiagnosticsInterceptor(this));
   }
 
   void setContext(String key, Object? value) {
-    if (!kDebugMode) return;
     context.value = {
       ...context.value,
       key: _safeText(value),
@@ -51,16 +49,15 @@ class DeveloperDiagnosticsService {
   void validation(String message) => setContext('Validation errors', message);
 
   void clear() {
-    if (!kDebugMode) return;
     entries.value = const [];
     context.value = const {};
   }
 
   void _add(DiagnosticEntry entry) {
-    if (!kDebugMode) return;
     final next = [...entries.value, entry];
-    entries.value = next.length > 100
-        ? List<DiagnosticEntry>.unmodifiable(next.sublist(next.length - 100))
+    // Kept small: it is also on in release builds (iPhone/Android).
+    entries.value = next.length > 40
+        ? List<DiagnosticEntry>.unmodifiable(next.sublist(next.length - 40))
         : List<DiagnosticEntry>.unmodifiable(next);
   }
 

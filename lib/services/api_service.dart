@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../config/api_config.dart';
 import '../models/task_item.dart';
+import '../utils/tasks_response_summary.dart';
 import 'developer_diagnostics_service.dart';
 
 class ApiException implements Exception {
@@ -190,7 +191,7 @@ class ApiService {
       }
 
       final rows = _expandTaskRows(_findTaskRows(body));
-      return rows
+      final tasks = rows
           .whereType<Map>()
           .map((row) => TaskItem.fromJson(Map<String, dynamic>.from(row)))
           .where((task) =>
@@ -198,6 +199,11 @@ class ApiService {
               task.referenceNumber.isNotEmpty ||
               task.customerName.isNotEmpty)
           .toList();
+      DeveloperDiagnosticsService.instance.setContext(
+        'Tasks summary (/tasks)',
+        TasksResponseSummary.build(body, tasks),
+      );
+      return tasks;
     } on DioException catch (error) {
       final response = error.response;
       debugPrint(
