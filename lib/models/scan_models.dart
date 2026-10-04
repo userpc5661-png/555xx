@@ -1,3 +1,4 @@
+import 'dart:convert';
 import '../utils/shipment_field_mapper.dart';
 
 class ScanActionResult {
@@ -410,6 +411,24 @@ class ScannedShipment {
     }
     return walk(node);
   }
+}
+
+dynamic _deepValue(Map<String, dynamic> source, String path) {
+  dynamic current = source;
+  for (final part in path.split('.')) {
+    if (current is Map) {
+      current = current[part];
+    } else {
+      return null;
+    }
+  }
+  if (current is Map) {
+    for (final key in const ['text', 'name', 'label', 'value', 'code']) {
+      final value = current[key];
+      if (value != null && value.toString().trim().isNotEmpty) return value;
+    }
+  }
+  return current;
 }
 
 List<Map<String, dynamic>> _maps(dynamic value) {

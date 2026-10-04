@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:sls_assistant_pro/services/api_service.dart';
 import '../models/task_item.dart';
 import '../services/developer_diagnostics_service.dart';
 import '../services/delivery_history_store.dart';
@@ -14,6 +15,7 @@ import '../services/scan_api_service.dart';
 import '../services/softpos_service.dart';
 import '../services/whatsapp_action_service.dart';
 import '../widgets/location_correction_dialog.dart';
+import 'scanner_screen.dart';
 
 enum ShipmentStatusMode { all, deliveredOnly, nonDeliveredOnly }
 
@@ -51,6 +53,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   };
 
   late final ScanApiService _api;
+  late final ApiService _mainApi;
   final _nationalAddress = TextEditingController();
   final _otp = TextEditingController();
   final _picker = ImagePicker();
@@ -58,6 +61,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   Map<String, dynamic>? _selected;
   XFile? _image;
   DateTime? _rescheduleAt;
+  bool _deliveryVerified = false;
   _CodPaymentMethod? _codPaymentMethod;
   bool _softPosPaid = false;
   bool _softPosProcessing = false;
@@ -81,6 +85,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   void initState() {
     super.initState();
     _api = ScanApiService(savedSession: widget.savedSession);
+    _mainApi = ApiService();
     _softPosService = SoftPosService();
     _diagnostics
       ..setContext('Current shipment ID', widget.task.officialOrderId)
@@ -602,31 +607,28 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       double? latitude;
       double? longitude;
       try {
-        // A recent cached fix keeps the submit fast; an old one could be far
-        // from where the driver is now, so take a fresh fix instead. Never
-        // substitute the customer's coordinates: they are sent as the
-        // driver's position.
         final lastKnown = await Geolocator.getLastKnownPosition();
-        final lastKnownIsFresh = lastKnown != null &&
-            DateTime.now().difference(lastKnown.timestamp) <
-                const Duration(minutes: 2) &&
-            lastKnown.accuracy <= 100;
-        final position = lastKnownIsFresh
-            ? lastKnown
-            : await Geolocator.getCurrentPosition(
-                locationSettings: const LocationSettings(
-                  accuracy: LocationAccuracy.high,
-                  timeLimit: Duration(seconds: 8),
-                ),
-              );
-        latitude = position.latitude;
-        longitude = position.longitude;
+        if (lastKnown != null) {
+          latitude = lastKnown.latitude;
+          longitude = lastKnown.longitude;
+        } else {
+          final position = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              timeLimit: Duration(seconds: 3),
+            ),
+          );
+          latitude = position.latitude;
+          longitude = position.longitude;
+        }
         _diagnostics.setContext(
           'GPS coordinates',
           '$latitude, $longitude',
         );
       } catch (error) {
-        _diagnostics.setContext('GPS coordinates', 'Unavailable: $error');
+        latitude ??= widget.task.latitude;
+        longitude ??= widget.task.longitude;
+        _diagnostics.setContext('GPS coordinates', 'Fallback: $latitude, $longitude ($error)');
       }
       if (needsAddress && (latitude == null || longitude == null)) {
         throw const ScanApiException(
@@ -676,7 +678,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                 : 'Not required');
 
       debugPrint('bulk/status called: true');
-      await _api.updateStatus(
+      final result = await _api.updateStatus(
         officialBody: body,
         assigneeId: assigneeId,
         latitude: latitude,
@@ -838,6 +840,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                     ? null
                     : (value) => setState(() {
                           _selected = value;
+                          _deliveryVerified = false;
                           _codPaymentMethod = null;
                           _softPosPaid = false;
                           _softPosTransactionId = null;
