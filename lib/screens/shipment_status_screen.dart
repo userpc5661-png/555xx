@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -726,43 +727,54 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
         'Image upload status',
         _image == null ? 'Not required/selected' : 'Uploaded',
       );
-      if (mounted) setState(() => _step = 'جارٍ التأكد من السيرفر…');
+      _diagnostics.setContext('Submit timings', timings.join(', '));
+      _verifiedStatusOnServer = 'قبل السيرفر الحالة، جارٍ التأكد منها';
 
-      // Read the shipment back from the server (GET only) and check that it
-      // now has the status that was sent. The local history is saved at the
-      // same time so it does not add to the wait.
-      final results = await Future.wait<Object?>([
-        _verifyOnServer(
+      if (delivered) {
+        // Local history only; it must not delay closing the screen.
+        unawaited(DeliveryHistoryStore.instance.recordCompleted(
+          widget.task,
+          awb: awb,
+        ));
+      }
+      widget.onUpdated?.call();
+      if (!mounted) return;
+
+      // The server accepted the update: close right away, then confirm in
+      // the background by reading the shipment back (GET only) and report
+      // the result at the top of the screen.
+      final overlay = Overlay.of(context, rootOverlay: true);
+      final shipmentLabel = awb.isEmpty ? '' : ' $awb';
+      TopToast.showOn(
+        overlay,
+        'تم الإرسال، جارٍ التأكد من السيرفر…$shipmentLabel',
+        kind: TopToastKind.warning,
+        duration: const Duration(seconds: 8),
+      );
+      Navigator.of(context).pop(true);
+
+      unawaited(() async {
+        final verifyWatch = Stopwatch()..start();
+        final verified = await _verifyOnServer(
           awb: awb,
           statusId: statusId,
           delivered: delivered,
           latitude: latitude,
           longitude: longitude,
-        ),
-        if (delivered)
-          DeliveryHistoryStore.instance.recordCompleted(
-            widget.task,
-            awb: awb,
-          ),
-      ]);
-      final verified = results.first as bool;
-      mark('verify');
-      _diagnostics.setContext('Submit timings', timings.join(', '));
-      _verifiedStatusOnServer = verified
-          ? 'تم التأكيد من سيرفر SLS: الحالة الجديدة ظاهرة على الشحنة'
-          : 'أُرسلت الحالة وقبلها السيرفر، لكن لم تظهر بعد على الشحنة';
-
-      widget.onUpdated?.call();
-      if (!mounted) return;
-      final shipmentLabel = awb.isEmpty ? '' : ' $awb';
-      TopToast.show(
-        context,
-        verified
-            ? 'تم التأكيد من السيرفر ✓ $displayLabel$shipmentLabel'
-            : 'أُرسلت الحالة وقبلها السيرفر، لكنها لم تظهر بعد على الشحنة. تحقق منها بعد قليل قبل إعادة الإرسال.',
-        kind: verified ? TopToastKind.success : TopToastKind.warning,
-      );
-      Navigator.of(context).pop(true);
+        );
+        _diagnostics.setContext(
+          'Submit timings',
+          '${timings.join(', ')}, verify ${verifyWatch.elapsedMilliseconds}ms '
+              '(${verified ? 'confirmed' : 'not shown yet'})',
+        );
+        TopToast.showOn(
+          overlay,
+          verified
+              ? 'تم التأكيد من السيرفر ✓ $displayLabel$shipmentLabel'
+              : 'أُرسلت الحالة وقبلها السيرفر، لكنها لم تظهر بعد على الشحنة$shipmentLabel. تحقق منها بعد قليل قبل إعادة الإرسال.',
+          kind: verified ? TopToastKind.success : TopToastKind.warning,
+        );
+      }());
     } on ScanApiException catch (error) {
       debugPrint('bulk/status called: true');
       debugPrint('bulk/status HTTP status: ${error.statusCode}');

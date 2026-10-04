@@ -18,6 +18,18 @@ class TopToast {
   }) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
+    showOn(overlay, message, kind: kind, duration: duration);
+  }
+
+  /// Same as [show], for callers that captured the overlay earlier (e.g.
+  /// before closing their screen).
+  static void showOn(
+    OverlayState overlay,
+    String message, {
+    TopToastKind kind = TopToastKind.success,
+    Duration? duration,
+  }) {
+    if (!overlay.mounted) return;
     _current?.remove();
     _current = null;
 
