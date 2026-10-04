@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -14,6 +15,7 @@ import '../services/phone_action_service.dart';
 import '../services/scan_api_service.dart';
 import '../services/softpos_service.dart';
 import '../services/whatsapp_action_service.dart';
+import '../utils/latin_digits_formatter.dart';
 import '../utils/national_address_utils.dart';
 import '../widgets/location_correction_dialog.dart';
 import 'scanner_screen.dart';
@@ -872,10 +874,18 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                 TextField(
                   controller: _otp,
                   enabled: !_submitting,
-                  obscureText: true,
                   keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    const LatinDigitsFormatter(),
+                    FilteringTextInputFormatter.digitsOnly,
+                  ],
                   maxLength: 4,
                   textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 8,
+                  ),
                   decoration: const InputDecoration(
                     labelText: 'POD Code',
                     hintText: 'أدخل الرمز المكوّن من 4 أرقام',
