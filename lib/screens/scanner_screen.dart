@@ -44,8 +44,25 @@ class _ScannerScreenState extends State<ScannerScreen>
   final List<LinehaulGroup> _linehaulGroups = [];
   ScannedOrderGroup? _orderGroup;
   final Set<String> _confirmedAwbs = {};
+  // IDs returned by the server for shipments confirmed in this session, so
+  // the list can mark them green even if the label shows another number.
+  final Set<String> _confirmedOrderKeys = {};
   int _initialConfirmedCount = 0;
   int _locallyConfirmedCount = 0;
+
+  static String _key(String value) =>
+      value.trim().replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+
+  /// Display only: whether [order] was scanned (now or before this session).
+  bool _isOrderScanned(GroupOrder order) {
+    if (order.isConfirmed) return true;
+    final keys = {
+      _key(order.referenceNumber),
+      _key(order.orderId),
+      if (order.id != null) '${order.id}',
+    }..remove('');
+    return keys.any(_confirmedOrderKeys.contains);
+  }
 
   @override
   void initState() {
@@ -539,6 +556,7 @@ class _ScannerScreenState extends State<ScannerScreen>
       _initialConfirmedCount =
           group.orders.where((order) => order.isConfirmed).length;
       _locallyConfirmedCount = 0;
+      _confirmedOrderKeys.clear();
       _confirmedAwbs
         ..clear()
         ..addAll(
@@ -570,6 +588,12 @@ class _ScannerScreenState extends State<ScannerScreen>
     if (!mounted) return;
     setState(() {
       _confirmedAwbs.add(awb);
+      _confirmedOrderKeys.addAll({
+        _key(awb),
+        _key(shipment.referenceNumber),
+        _key(shipment.actualAwb),
+        '${shipment.id}',
+      }..remove(''));
       _locallyConfirmedCount += 1;
       _busy = false;
       _lastCode = null;
@@ -629,9 +653,23 @@ class _ScannerScreenState extends State<ScannerScreen>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('تحويل المجموعة إلى OFD'),
-        content: Text(
-          'هل تريد تحويل جميع طلبات المجموعة ${group.id} إلى OFD؟',
+        title: const Text('خارج للتوصيل (OFD)'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'هل تريد تحويل جميع طلبات المجموعة ${group.id} إلى OFD؟',
+              ),
+              const SizedBox(height: 12),
+              Flexible(child: _GroupOrdersList(
+                orders: group.orders,
+                isScanned: _isOrderScanned,
+              )),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -667,6 +705,43 @@ class _ScannerScreenState extends State<ScannerScreen>
       await _showError(error.toString());
       await _resumeScanner();
     }
+  }
+
+  Future<void> _showGroupOrders() async {
+    final group = _orderGroup;
+    if (group == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: FractionallySizedBox(
+          heightFactor: 0.75,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'شحنات المجموعة ${group.id}',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: _GroupOrdersList(
+                    orders: group.orders,
+                    isScanned: _isOrderScanned,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _showError(String message) async {
@@ -771,7 +846,15 @@ class _ScannerScreenState extends State<ScannerScreen>
                                 ? 0
                                 : _confirmedCount / _orderGroup!.orders.length,
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 6),
+                          OutlinedButton.icon(
+                            onPressed: _showGroupOrders,
+                            icon: const Icon(Icons.list_alt_rounded),
+                            label: Text(
+                              'قائمة الشحنات ($_confirmedCount/${_orderGroup!.orders.length})',
+                            ),
+                          ),
+                          const SizedBox(height: 6),
                           FilledButton.icon(
                             onPressed: _orderGroup!.orders.isNotEmpty &&
                                     _confirmedCount >=
@@ -779,8 +862,7 @@ class _ScannerScreenState extends State<ScannerScreen>
                                 ? _moveToOfd
                                 : null,
                             icon: const Icon(Icons.local_shipping),
-                            label: const Text(
-                                'بدء التوصيل وتحويل المجموعة إلى OFD'),
+                            label: const Text('خارج للتوصيل (OFD)'),
                           ),
                           if (_confirmedCount < _orderGroup!.orders.length) ...[
                             const SizedBox(height: 6),
@@ -851,6 +933,90 @@ class _ScannerScreenState extends State<ScannerScreen>
             textAlign: TextAlign.center,
           ),
         ],
+      ],
+    );
+  }
+}
+
+/// Every shipment of the group: green = scanned, red = not scanned yet.
+class _GroupOrdersList extends StatelessWidget {
+  final List<GroupOrder> orders;
+  final bool Function(GroupOrder) isScanned;
+
+  const _GroupOrdersList({required this.orders, required this.isScanned});
+
+  @override
+  Widget build(BuildContext context) {
+    final scanned = orders.where(isScanned).length;
+    final missing = orders.length - scanned;
+    // Not scanned first, so missing shipments are easy to spot.
+    final sorted = [...orders]..sort(
+        (a, b) => (isScanned(a) ? 1 : 0) - (isScanned(b) ? 1 : 0),
+      );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'تم المسح: $scanned  •  لم تُمسح: $missing',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: missing == 0 ? Colors.green : Colors.red,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Flexible(
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: orders.length,
+            itemBuilder: (context, index) {
+              final order = sorted[index];
+              final ok = isScanned(order);
+              final color = ok ? Colors.green : Colors.red;
+              final number = order.referenceNumber.isNotEmpty
+                  ? order.referenceNumber
+                  : order.orderId;
+              return Container(
+                margin: const EdgeInsets.symmetric(vertical: 3),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  border: Border.all(color: color.withValues(alpha: 0.6)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      ok ? Icons.check_circle : Icons.cancel,
+                      color: color,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        number,
+                        textDirection: TextDirection.ltr,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: color,
+                          decoration:
+                              ok ? null : TextDecoration.lineThrough,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      ok ? 'تم المسح' : 'لم تُمسح',
+                      style: TextStyle(color: color, fontSize: 12),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
       ],
     );
   }
