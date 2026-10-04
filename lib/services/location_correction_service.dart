@@ -148,6 +148,10 @@ class LocationCorrectionService {
         host == 'www.waze.com';
   }
 
+  /// Coordinates written in [text] (plain "lat, lng" or a maps URL that
+  /// already contains them). No network access.
+  static CorrectedLocation? extractFromText(String text) => _extract(text);
+
   static CorrectedLocation? _extract(String text) {
     var decoded = text;
     try {

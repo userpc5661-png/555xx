@@ -15,6 +15,7 @@ import '../services/local_contact_store.dart';
 import '../services/local_shipment_status_store.dart';
 import '../utils/phone_number_utils.dart';
 import 'location_correction_dialog.dart';
+import 'location_sources_sheet.dart';
 
 class TaskCard extends StatelessWidget {
   final TaskItem task;
@@ -745,6 +746,9 @@ class TaskCard extends StatelessWidget {
                     if (value == 'correct_location' && context.mounted) {
                       await _correctLocation(context);
                     }
+                    if (value == 'location_sources' && context.mounted) {
+                      await showLocationSourcesSheet(context, task);
+                    }
                   },
                   itemBuilder: (_) => const [
                     PopupMenuItem(
@@ -754,6 +758,15 @@ class TaskCard extends StatelessWidget {
                         contentPadding: EdgeInsets.zero,
                         leading: Icon(Icons.map_outlined),
                         title: Text('عرض على خريطة التطبيق'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'location_sources',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.travel_explore_rounded),
+                        title: Text('مواقع العميل من السيرفر'),
                       ),
                     ),
                     PopupMenuItem(
