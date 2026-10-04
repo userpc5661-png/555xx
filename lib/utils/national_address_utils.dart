@@ -34,11 +34,19 @@ class NationalAddressUtils {
   /// Every short address that appears anywhere in the shipment's server
   /// data, normalized. Used to refuse sending the customer's current address
   /// again, like the official app does.
-  static Set<String> shortAddressesIn(Object? data) {
+  static Set<String> shortAddressesIn(
+    Object? data, {
+    bool skipSenderFields = false,
+  }) {
     final found = <String>{};
     void walk(Object? node) {
       if (node is Map) {
-        node.values.forEach(walk);
+        for (final entry in node.entries) {
+          if (skipSenderFields && _isSenderKey(entry.key.toString())) {
+            continue;
+          }
+          walk(entry.value);
+        }
       } else if (node is Iterable) {
         node.forEach(walk);
       } else if (node is String) {
@@ -50,5 +58,20 @@ class NationalAddressUtils {
 
     walk(data);
     return found;
+  }
+
+  static final _senderKey = RegExp(
+    r'(collection|pickup|merchant|store|sender|shipper|seller|origin|from|requested)',
+  );
+
+  static bool _isSenderKey(String key) => _senderKey.hasMatch(
+    key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), ''),
+  );
+
+  /// The customer's short address from the shipment data, ignoring the
+  /// merchant/sender address that is also printed on the label.
+  static String? customerShortAddress(Map<String, dynamic> raw) {
+    final found = shortAddressesIn(raw, skipSenderFields: true);
+    return found.isEmpty ? null : found.first;
   }
 }

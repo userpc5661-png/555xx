@@ -18,6 +18,7 @@ dependencies:
   flutter_compass: ^0.8.1
   maplibre: ^0.3.5
   image_picker: ^1.1.2
+  geocoding: ^5.0.0
 
 dev_dependencies:
   flutter_test:
