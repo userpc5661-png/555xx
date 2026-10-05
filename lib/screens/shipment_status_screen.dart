@@ -780,12 +780,15 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
               logTimings(confirmed ? 'reply+confirmed' : 'reply, not shown yet');
               return StatusSendOutcome.success(confirmed: confirmed);
             }
-            // An answer from the server (HTTP error) is a real refusal.
-            if (error is ScanApiException && error.statusCode != null) {
-              logTimings('refused');
+            // A 4xx answer is a real refusal. A 5xx (e.g. 504 Gateway
+            // Time-out after 60s, seen in diagnostics) only means the
+            // server was slow: SLS had already recorded the delivery.
+            final status = error is ScanApiException ? error.statusCode : null;
+            if (status != null && status < 500) {
+              logTimings('refused ($status)');
               return StatusSendOutcome.failure(error);
             }
-            // No reply at all: the server may still have applied it.
+            // No reply, or a server error: it may still have been applied.
             final applied = await _verifyOnServer(
               awb: awb,
               statusId: statusId,
