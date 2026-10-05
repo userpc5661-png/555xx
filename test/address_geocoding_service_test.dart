@@ -31,4 +31,13 @@ void main() {
     };
     expect(NationalAddressUtils.customerShortAddress(raw), 'EHAC4301');
   });
+
+  test('customer short address comes from delivery_location_na_short', () {
+    final raw = {
+      'collection_location_na_short': 'RNMA7272',
+      'delivery_location_na_short': 'EDJA7025',
+      'delivery_location_address1': '7025, 15ب, حي غرناطة,الدمام, 32245, 4972',
+    };
+    expect(NationalAddressUtils.customerShortAddress(raw), 'EDJA7025');
+  });
 }

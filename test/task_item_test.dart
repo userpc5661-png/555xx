@@ -140,4 +140,37 @@ void main() {
       expect(task.isRvp, 0);
     });
   });
+
+  group('real SLS shipment shape', () {
+    // Trimmed from a real orders/awb response.
+    Map<String, dynamic> shipment({Object? lat, Object? lng}) => {
+          'id': 4371862843,
+          'order_id': '11026199332639',
+          'status': 'Completed',
+          'status_code': 3,
+          'status_label': 'Shipment delivered',
+          'collection_location_lat': '24.62049597',
+          'collection_location_lng': '46.8623039',
+          'collection_location_na_short': 'RNMA7272',
+          'delivery_location_lat': lat,
+          'delivery_location_lng': lng,
+          'delivery_location_na_short': 'EDJA7025',
+          'customer': {'name': 'Salasah', 'lat': '24.619731', 'lng': '46.863063'},
+        };
+
+    test('uses the delivery coordinates', () {
+      final task = TaskItem.fromJson(
+        shipment(lat: '26.41950528', lng: '50.08020994'),
+      );
+      expect(task.latitude, 26.41950528);
+      expect(task.longitude, 50.08020994);
+      expect(task.progress, TaskProgress.completed);
+    });
+
+    test('never falls back to the merchant location', () {
+      final task = TaskItem.fromJson(shipment(lat: null, lng: null));
+      expect(task.latitude, isNull);
+      expect(task.longitude, isNull);
+    });
+  });
 }

@@ -71,6 +71,15 @@ class NationalAddressUtils {
   /// The customer's short address from the shipment data, ignoring the
   /// merchant/sender address that is also printed on the label.
   static String? customerShortAddress(Map<String, dynamic> raw) {
+    // SLS sends it explicitly as delivery_location_na_short.
+    for (final source in [raw, raw['order']]) {
+      if (source is! Map) continue;
+      final value = source['delivery_location_na_short'];
+      if (value is String) {
+        final normalized = normalize(value);
+        if (isValidShortAddress(normalized)) return normalized;
+      }
+    }
     final found = shortAddressesIn(raw, skipSenderFields: true);
     return found.isEmpty ? null : found.first;
   }

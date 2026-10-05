@@ -353,8 +353,26 @@ class TaskItem {
       return null;
     }
 
-    var latitude = getCoord(['delivery_location_lat', 'delivery_latitude', 'lat', 'latitude']);
-    var longitude = getCoord(['delivery_location_lng', 'delivery_longitude', 'lng', 'longitude']);
+    // Generic "lat"/"lng" are read only at the top level of the shipment.
+    // Searched recursively they matched nested objects such as `customer`
+    // (the merchant, e.g. a Riyadh warehouse) and put the customer's pin at
+    // the merchant when the delivery coordinates were missing.
+    double? topLevelCoord(List<String> keys) {
+      for (final key in keys) {
+        final val = json[key];
+        if (val is num && val != 0) return val.toDouble();
+        if (val is String) {
+          final p = double.tryParse(val.trim());
+          if (p != null && p != 0) return p;
+        }
+      }
+      return null;
+    }
+
+    var latitude = getCoord(['delivery_location_lat', 'delivery_latitude']) ??
+        topLevelCoord(['lat', 'latitude']);
+    var longitude = getCoord(['delivery_location_lng', 'delivery_longitude']) ??
+        topLevelCoord(['lng', 'longitude']);
 
     // Fallback: parse combined "lat, lng" string from delivery_lat_long
     if (latitude == null || longitude == null) {
