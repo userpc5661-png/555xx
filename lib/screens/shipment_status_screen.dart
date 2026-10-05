@@ -716,8 +716,9 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
         'status': statusId,
         'status_label': officialStatusLabel,
         'awbs': [awb],
-        if (needsAddress && address.isNotEmpty)
-          'new_address_details': address,
+        // The official SLS app (1.9.13) sends the new National Address in
+        // its form field "location"; SLS ignored "new_address_details".
+        if (needsAddress && address.isNotEmpty) 'location': address,
         if (_image != null)
           'poc_attachment': await MultipartFile.fromFile(
             _image!.path,
@@ -741,7 +742,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
             'National Address payload',
             needsAddress
                 ? {
-                    'new_address_details': address,
+                    'location': address,
                     'latitude': latitude,
                     'longitude': longitude
                   }
