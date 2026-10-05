@@ -18,10 +18,12 @@ import '../services/softpos_service.dart';
 import '../services/whatsapp_action_service.dart';
 import '../utils/latin_digits_formatter.dart';
 import '../utils/national_address_utils.dart';
+import '../utils/shipment_pieces.dart';
 import '../utils/status_verification.dart';
 import '../widgets/location_correction_dialog.dart';
 import '../widgets/top_toast.dart';
 import '../services/status_send_queue.dart';
+import 'piece_scan_screen.dart';
 import 'scanner_screen.dart';
 
 enum ShipmentStatusMode { all, deliveredOnly, nonDeliveredOnly }
@@ -66,6 +68,12 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   final _picker = ImagePicker();
   List<Map<String, dynamic>> _options = const [];
   Map<String, dynamic>? _selected;
+  // Multi-piece shipment: every piece's label is scanned before delivery.
+  late final String _pieceAwb = (widget.awbOverride?.trim().isNotEmpty ?? false)
+      ? widget.awbOverride!.trim()
+      : widget.task.realAwb.trim();
+  late final List<String> _pieces =
+      ShipmentPieces.of(widget.task.raw, _pieceAwb);
   XFile? _image;
   DateTime? _rescheduleAt;
   bool _deliveryVerified = false;
@@ -594,6 +602,16 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       _validation('اختر تاريخ ووقت إعادة الجدولة.');
       return;
     }
+    if (delivered && _pieces.isNotEmpty) {
+      final missing = ShipmentPieces.missing(_pieceAwb, _pieces);
+      if (missing.isNotEmpty) {
+        _validation(
+          'الشحنة ${_pieces.length} قطع. امسح كل القطع قبل التسليم '
+          '(ممسوح ${_pieces.length - missing.length} من ${_pieces.length}).',
+        );
+        return;
+      }
+    }
     final isCod = widget.task.paymentKind == PaymentKind.cashOnDelivery;
     final isPrepaid = widget.task.paymentKind == PaymentKind.prepaid;
 
@@ -998,6 +1016,46 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
     return check();
   }
 
+  Widget _piecesCard() {
+    final done = _pieces.length -
+        ShipmentPieces.missing(_pieceAwb, _pieces).length;
+    final complete = done == _pieces.length;
+    final color = complete ? Colors.green : Colors.orange;
+    return Card(
+      color: color.withValues(alpha: 0.12),
+      child: ListTile(
+        leading: Icon(
+          complete ? Icons.check_circle : Icons.inventory_2_outlined,
+          color: color,
+        ),
+        title: Text(
+          'الشحنة ${_pieces.length} قطع — ممسوح $done من ${_pieces.length}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text(
+          complete
+              ? 'تم مسح كل القطع'
+              : 'امسح باركود كل قطعة قبل التسليم',
+        ),
+        trailing: complete
+            ? null
+            : FilledButton(
+                onPressed: _submitting ? null : _scanPieces,
+                child: const Text('مسح القطع'),
+              ),
+      ),
+    );
+  }
+
+  Future<void> _scanPieces() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<bool>(
+        builder: (_) => PieceScanScreen(awb: _pieceAwb, pieces: _pieces),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
   Future<void> _openWhatsApp() async {
     final result = await WhatsAppActionService.openForTask(widget.task);
     if (!mounted || result.success) return;
@@ -1120,6 +1178,10 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                           _rescheduleAt = null;
                         }),
               ),
+              if (delivered && _pieces.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _piecesCard(),
+              ],
               if (delivered &&
                   widget.task.paymentKind == PaymentKind.prepaid) ...[
                 const SizedBox(height: 12),
