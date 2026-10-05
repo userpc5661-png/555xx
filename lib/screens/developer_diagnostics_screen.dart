@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../services/developer_diagnostics_service.dart';
 
@@ -18,6 +19,70 @@ class _DeveloperDiagnosticsScreenState
     extends State<DeveloperDiagnosticsScreen> {
   final _service = DeveloperDiagnosticsService.instance;
   String _query = '';
+  bool _exporting = false;
+  int? _logBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshSize();
+  }
+
+  Future<void> _refreshSize() async {
+    final bytes = await _service.logBytes();
+    if (mounted) setState(() => _logBytes = bytes);
+  }
+
+  /// Shares the whole saved log as a .txt file (WhatsApp, Files, email, or
+  /// to attach in the chat) instead of copying a huge text.
+  Future<void> _shareLog() async {
+    if (_exporting) return;
+    final box = context.findRenderObject() as RenderBox?;
+    setState(() => _exporting = true);
+    try {
+      final file = await _service.exportLogFile();
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path, mimeType: 'text/plain')],
+          subject: 'SLS diagnostics',
+          sharePositionOrigin: box == null
+              ? null
+              : box.localToGlobal(Offset.zero) & box.size,
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تعذر حفظ الملف: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  Future<void> _startNewLog() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('بدء سجل جديد؟'),
+        content: const Text('يُحذف السجل المحفوظ الحالي. استخدمه قبل بداية التوصيل.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('بدء سجل جديد'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _service.startNewLog();
+    await _refreshSize();
+  }
 
   Future<void> _copy(String text, String done) async {
     await Clipboard.setData(ClipboardData(text: text));
@@ -51,6 +116,16 @@ class _DeveloperDiagnosticsScreenState
         appBar: AppBar(
           title: const Text('تشخيص المطوّر'),
           actions: [
+            IconButton(
+              onPressed: _exporting ? null : _shareLog,
+              tooltip: 'مشاركة السجل كملف',
+              icon: _exporting
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.ios_share_rounded),
+            ),
             PopupMenuButton<String>(
               tooltip: 'نسخ',
               icon: const Icon(Icons.copy_all_rounded),
@@ -76,9 +151,9 @@ class _DeveloperDiagnosticsScreenState
               ],
             ),
             IconButton(
-              onPressed: _service.clear,
-              icon: const Icon(Icons.delete_sweep_outlined),
-              tooltip: 'مسح السجل',
+              onPressed: _startNewLog,
+              icon: const Icon(Icons.restart_alt_rounded),
+              tooltip: 'بدء سجل جديد',
             ),
           ],
         ),
@@ -92,13 +167,34 @@ class _DeveloperDiagnosticsScreenState
                 return ListView(
                   padding: const EdgeInsets.all(12),
                   children: [
-                    const Card(
+                    Card(
                       child: Padding(
-                        padding: EdgeInsets.all(12),
-                        child: Text(
-                          'كل ما أرسله البرنامج للسيرفر وما رجع منه في هذه الجلسة '
-                          '(آخر 40 طلبًا). التوكنات والكوكي وكلمات المرور مخفية. '
-                          'يُمسح السجل عند إغلاق البرنامج.',
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'كل طلب للسيرفر ورده يُحفظ في ملف على الجوال حتى بعد '
+                              'إغلاق البرنامج${_logBytes == null ? '' : ' (الحجم الآن ${(_logBytes! / 1024 / 1024).toStringAsFixed(1)} ميجا)'}. '
+                              'التوكنات والكوكي وكلمات المرور مخفية. '
+                              'تعرض الشاشة آخر 40 طلبًا فقط.',
+                            ),
+                            const SizedBox(height: 8),
+                            FilledButton.icon(
+                              onPressed: _exporting ? null : _shareLog,
+                              icon: const Icon(Icons.ios_share_rounded),
+                              label: Text(
+                                _exporting
+                                    ? 'جارٍ تجهيز الملف…'
+                                    : 'مشاركة السجل كاملًا كملف .txt',
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _startNewLog,
+                              icon: const Icon(Icons.restart_alt_rounded),
+                              label: const Text('بدء سجل جديد (قبل التوصيل)'),
+                            ),
+                          ],
                         ),
                       ),
                     ),

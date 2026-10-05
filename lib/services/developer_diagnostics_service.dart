@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 
 class DiagnosticEntry {
   final DateTime timestamp;
@@ -70,7 +73,84 @@ class DeveloperDiagnosticsService {
     context.value = const {};
   }
 
+  // ---- Log file: every request/reply of the shift, kept across restarts,
+  // so the whole delivery day can be shared as one .txt file. ----
+
+  static const _maxLogBytes = 20 * 1024 * 1024;
+  Future<void> _writes = Future<void>.value();
+  bool _sessionHeaderWritten = false;
+
+  Future<Directory> _dir() async => getApplicationDocumentsDirectory();
+  Future<File> _logFile() async => File('${(await _dir()).path}/diagnostics_log.txt');
+  Future<File> _previousLogFile() async =>
+      File('${(await _dir()).path}/diagnostics_log_prev.txt');
+
+  void _append(String text) {
+    _writes = _writes.then((_) async {
+      try {
+        final file = await _logFile();
+        if (await file.exists() && await file.length() > _maxLogBytes) {
+          await file.rename((await _previousLogFile()).path);
+        }
+        final header = _sessionHeaderWritten
+            ? ''
+            : '\n===== تشغيل البرنامج ${DateTime.now().toIso8601String()} =====\n\n';
+        _sessionHeaderWritten = true;
+        await (await _logFile())
+            .writeAsString('$header$text\n\n', mode: FileMode.append, flush: false);
+      } catch (error) {
+        debugPrint('Diagnostics log write failed: $error');
+      }
+    });
+  }
+
+  /// Size of the saved log, for the screen.
+  Future<int> logBytes() async {
+    await _writes;
+    var total = 0;
+    for (final file in [await _previousLogFile(), await _logFile()]) {
+      if (await file.exists()) total += await file.length();
+    }
+    return total;
+  }
+
+  /// One .txt file with the summaries and the whole saved log, streamed so
+  /// a big log does not freeze the phone.
+  Future<File> exportLogFile() async {
+    await _writes;
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .substring(0, 16)
+        .replaceAll(RegExp(r'[^0-9]'), '');
+    final out = File('${(await getTemporaryDirectory()).path}/sls_diagnostics_$stamp.txt');
+    final sink = out.openWrite();
+    sink.writeln('SLS Driver diagnostics — ${DateTime.now().toIso8601String()}');
+    sink.writeln('(tokens, cookies and passwords are masked)\n');
+    for (final item in context.value.entries) {
+      sink.writeln('## ${item.key}\n${item.value}\n');
+    }
+    sink.writeln('\n########## سجل الطلبات ##########\n');
+    for (final file in [await _previousLogFile(), await _logFile()]) {
+      if (await file.exists()) await sink.addStream(file.openRead());
+    }
+    await sink.close();
+    return out;
+  }
+
+  /// Deletes the saved log and the in-memory list (e.g. before a shift).
+  Future<void> startNewLog() async {
+    await _writes;
+    for (final file in [await _previousLogFile(), await _logFile()]) {
+      try {
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
+    _sessionHeaderWritten = false;
+    clear();
+  }
+
   void _add(DiagnosticEntry entry) {
+    _append(entry.toReport());
     final next = [...entries.value, entry];
     // Kept small: it is also on in release builds (iPhone/Android).
     entries.value = next.length > 40
