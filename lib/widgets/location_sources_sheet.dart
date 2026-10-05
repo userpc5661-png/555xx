@@ -3,10 +3,12 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/task_item.dart';
+import '../services/address_geocoding_service.dart';
 import '../services/location_correction_service.dart';
 import '../services/navigation_service.dart';
 import '../services/scan_api_service.dart';
 import '../utils/location_sources.dart';
+import '../utils/national_address_utils.dart';
 
 /// Shows every location the SLS server sent for [task], which one the app
 /// is using, and lets the driver adopt another one as a local correction.
@@ -74,22 +76,66 @@ class _LocationSourcesSheetState extends State<_LocationSourcesSheet> {
   }
 
   /// Read-only GET requests; they do not change anything in SLS.
+  /// Locates the customer's National Address with the phone's geocoder so
+  /// it can be compared with the server's pin (distance is shown per row).
+  Future<LocationSource?> _nationalAddressSource(
+    Map<String, dynamic>? extraRaw,
+  ) async {
+    final short = NationalAddressUtils.customerShortAddress(widget.task.raw) ??
+        (extraRaw == null
+            ? null
+            : NationalAddressUtils.customerShortAddress(extraRaw));
+    if (short == null) return null;
+    final location = await AddressGeocodingService.locate(short);
+    return LocationSource(
+      path: '[العنوان الوطني] $short',
+      location: location,
+      // Not found by the phone: the map button searches it in Google Maps.
+      rawText: location == null
+          ? Uri.https('www.google.com', '/maps/search/', {
+              'api': '1',
+              'query': short,
+            }).toString()
+          : null,
+    );
+  }
+
   Future<void> _fetchServerSources() async {
     final session = widget.savedSession;
-    if (session == null || session.isEmpty) return;
     setState(() => _fetching = true);
-    final api = ScanApiService(savedSession: session);
     final found = <LocationSource>[];
     final notes = <String>[];
+    Map<String, dynamic>? awbRaw;
 
     final awb = widget.task.realAwb.trim();
-    if (awb.isNotEmpty) {
+    final api = session == null || session.isEmpty
+        ? null
+        : ScanApiService(savedSession: session);
+    if (api != null && awb.isNotEmpty) {
       try {
         final shipment = await api.scanOrder(awb);
+        awbRaw = shipment.raw;
         found.addAll(_tagged('awb', LocationSources.find(shipment.raw)));
       } catch (error) {
         notes.add('orders/awb: $error');
       }
+    }
+    try {
+      final national = await _nationalAddressSource(awbRaw);
+      if (national != null) found.insert(0, national);
+    } catch (error) {
+      notes.add('national address: $error');
+    }
+    if (api == null) {
+      if (!mounted) return;
+      setState(() {
+        _sources.insertAll(0, found);
+        _fetchNotes
+          ..clear()
+          ..addAll(notes);
+        _fetching = false;
+      });
+      return;
     }
     try {
       final orders = await api.getSequencerOddOrders();
@@ -104,7 +150,7 @@ class _LocationSourcesSheetState extends State<_LocationSourcesSheet> {
 
     if (!mounted) return;
     setState(() {
-      _sources.addAll(found);
+      _sources.insertAll(0, found);
       _fetchNotes
         ..clear()
         ..addAll(notes);
@@ -255,7 +301,7 @@ class _LocationSourcesSheetState extends State<_LocationSourcesSheet> {
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: Text(
-                  'جاري جلب الموقع من بيانات مسح الشحنة والمسار…',
+                  'جاري جلب الموقع من العنوان الوطني وبيانات الشحنة والمسار…',
                   style: TextStyle(fontSize: 12),
                 ),
               ),
