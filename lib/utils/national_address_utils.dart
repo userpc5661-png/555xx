@@ -1,3 +1,5 @@
+import 'shipment_field_mapper.dart';
+
 /// Saudi National Address "short address": 4 Latin letters + 4 digits,
 /// e.g. RRRD2929. This is what the official SLS driver app asks for.
 class NationalAddressUtils {
@@ -71,15 +73,20 @@ class NationalAddressUtils {
   /// The customer's short address from the shipment data, ignoring the
   /// merchant/sender address that is also printed on the label.
   static String? customerShortAddress(Map<String, dynamic> raw) {
-    // SLS sends it explicitly as delivery_location_na_short.
+    // SLS sends it explicitly: delivery_location_na_short for a delivery,
+    // collection_location_na_short for a return collected from the customer.
+    final field = ShipmentFieldMapper.isReverse(raw)
+        ? 'collection_location_na_short'
+        : 'delivery_location_na_short';
     for (final source in [raw, raw['order']]) {
       if (source is! Map) continue;
-      final value = source['delivery_location_na_short'];
+      final value = source[field];
       if (value is String) {
         final normalized = normalize(value);
         if (isValidShortAddress(normalized)) return normalized;
       }
     }
+    if (ShipmentFieldMapper.isReverse(raw)) return null;
     final found = shortAddressesIn(raw, skipSenderFields: true);
     return found.isEmpty ? null : found.first;
   }

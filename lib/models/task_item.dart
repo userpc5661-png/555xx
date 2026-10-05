@@ -96,6 +96,9 @@ class TaskItem {
   }
 
   bool get hasCoordinates => latitude != null && longitude != null;
+
+  /// A return collected from the customer (order_type "reverse").
+  bool get isReverse => ShipmentFieldMapper.isReverse(raw);
   bool get hasNavigableLocation => hasCoordinates || address.trim().isNotEmpty;
   bool get isCashOnDelivery => paymentKind == PaymentKind.cashOnDelivery;
 
@@ -335,10 +338,27 @@ class TaskItem {
 
   factory TaskItem.fromJson(Map<String, dynamic> json) {
     final reference = ShipmentFieldMapper.shipmentNumber(json);
-    final storeName = ShipmentFieldMapper.merchantName(json);
-    final customerName = ShipmentFieldMapper.recipientName(json);
-    final customerPhone = ShipmentFieldMapper.recipientPhone(json);
-    final address = ShipmentFieldMapper.recipientAddress(json);
+    // Returns ("reverse") are collected from the customer: the customer is
+    // in collection_location_* and the merchant in delivery_location_*.
+    final reverse = ShipmentFieldMapper.isReverse(json);
+    String pick(String reverseValue, String normalValue) =>
+        reverse && reverseValue.isNotEmpty ? reverseValue : normalValue;
+    final storeName = pick(
+      ShipmentFieldMapper.reverseMerchantName(json),
+      ShipmentFieldMapper.merchantName(json),
+    );
+    final customerName = pick(
+      ShipmentFieldMapper.reverseCustomerName(json),
+      ShipmentFieldMapper.recipientName(json),
+    );
+    final customerPhone = pick(
+      ShipmentFieldMapper.reverseCustomerPhone(json),
+      ShipmentFieldMapper.recipientPhone(json),
+    );
+    final address = pick(
+      ShipmentFieldMapper.reverseCustomerAddress(json),
+      ShipmentFieldMapper.recipientAddress(json),
+    );
 
     // Coordinate mapping fallbacks
     double? getCoord(List<String> keys) {
@@ -369,10 +389,17 @@ class TaskItem {
       return null;
     }
 
-    var latitude = getCoord(['delivery_location_lat', 'delivery_latitude']) ??
+    var latitude = (reverse ? getCoord(['collection_location_lat']) : null) ??
+        getCoord(['delivery_location_lat', 'delivery_latitude']) ??
         topLevelCoord(['lat', 'latitude']);
-    var longitude = getCoord(['delivery_location_lng', 'delivery_longitude']) ??
+    var longitude = (reverse ? getCoord(['collection_location_lng']) : null) ??
+        getCoord(['delivery_location_lng', 'delivery_longitude']) ??
         topLevelCoord(['lng', 'longitude']);
+    if (reverse && (latitude == null) != (longitude == null)) {
+      // Never mix a collection latitude with a delivery longitude.
+      latitude = null;
+      longitude = null;
+    }
 
     // Fallback: parse combined "lat, lng" string from delivery_lat_long
     if (latitude == null || longitude == null) {

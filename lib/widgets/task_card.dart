@@ -635,6 +635,26 @@ class TaskCard extends StatelessWidget {
                         task.displayStoreName,
                         style: TextStyle(color: Colors.grey[600], fontSize: 13),
                       ),
+                      if (task.isReverse)
+                        Container(
+                          margin: const EdgeInsets.only(top: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.deepPurple.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text(
+                            'استلام مرتجع من العميل',
+                            style: TextStyle(
+                              color: Colors.deepPurple,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),

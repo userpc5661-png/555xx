@@ -45,6 +45,54 @@ class ShipmentFieldMapper {
     return walk(node, '');
   }
 
+  /// A return (reverse pickup): the driver collects the parcel from the
+  /// customer, so the customer is in the `collection_location_*` fields and
+  /// the merchant is in `delivery_location_*` (the opposite of a normal
+  /// delivery). SLS marks it with order_type "reverse".
+  static bool isReverse(Map<String, dynamic> json) {
+    final type = _findRawValue(json, ['order_type'])?.toString().trim().toLowerCase() ?? '';
+    if (type == 'reverse' || type == 'return' || type == 'rvp') return true;
+    final rvp = _findRawValue(json, ['is_rvp', 'current_is_rvp'])?.toString().trim().toLowerCase();
+    return rvp == '1' || rvp == 'true';
+  }
+
+  /// For a return: the customer the driver visits.
+  static String reverseCustomerName(Map<String, dynamic> json) => firstNonEmpty([
+        _findRawValue(json, ['collection_location_contact']),
+        _findRawValue(json, ['collection_location_name']),
+      ]);
+
+  static String reverseCustomerPhone(Map<String, dynamic> json) =>
+      firstNonEmpty([_findRawValue(json, ['collection_phone'])]);
+
+  /// For a return: the merchant the parcel goes back to.
+  static String reverseMerchantName(Map<String, dynamic> json) {
+    final customer = json['customer'];
+    return firstNonEmpty([
+      _findRawValue(json, ['delivery_location_name']),
+      _findRawValue(json, ['delivery_location_contact']),
+      customer is Map ? customer['name'] : null,
+      json['requested_by'],
+    ]);
+  }
+
+  static String reverseCustomerAddress(Map<String, dynamic> json) {
+    final parts = <String>[];
+    for (final key in const [
+      'collection_location_address1',
+      'collection_location_address2',
+      'collection_location_area',
+      'collection_location_city',
+    ]) {
+      final text = _findRawValue(json, [key])?.toString().trim() ?? '';
+      if (text.isEmpty || text.toLowerCase() == 'null') continue;
+      final normalized = _normalize(text);
+      if (parts.any((p) => _normalize(p).contains(normalized))) continue;
+      parts.add(text);
+    }
+    return parts.join('، ');
+  }
+
   static String recipientName(Map<String, dynamic> json) {
     return firstNonEmpty([
       json['delivery_location_name'],

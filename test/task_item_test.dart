@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sls_assistant_pro/models/task_item.dart';
+import 'package:sls_assistant_pro/utils/national_address_utils.dart';
 
 void main() {
   group('TaskItem.fromJson', () {
@@ -171,6 +172,52 @@ void main() {
       final task = TaskItem.fromJson(shipment(lat: null, lng: null));
       expect(task.latitude, isNull);
       expect(task.longitude, isNull);
+    });
+  });
+
+  group('return shipment (order_type reverse)', () {
+    // Trimmed from a real orders/awb response.
+    final raw = {
+      'order_id': '200926204229647',
+      'order_type': 'reverse',
+      'is_rto': 1,
+      'status_code': 4,
+      'collection_location_contact': 'Yousuf Yousuf',
+      'collection_location_name': 'Yousuf Yousuf',
+      'collection_location_address1': '7474, طريق الفيحاء, حي الفيحاء, الجبيل, 35811, 2541',
+      'collection_location_city': 'الجبيل',
+      'collection_location_lat': '27.12284655',
+      'collection_location_lng': '49.54458873',
+      'collection_location_na_short': 'ETAB7474',
+      'collection_phone': '+966567493611',
+      'delivery_phone': '+966581896940',
+      'delivery_location_name': 'ARABIANMILE',
+      'delivery_location_address1': '7454, طريق الفيحاء, حي الفيحاء,الجبيل, 35811, 2534',
+      'delivery_location_lat': '27.12266456',
+      'delivery_location_lng': '49.54451934',
+      'delivery_location_na_short': 'ETAA7454',
+      'customer': {'name': 'ARABIANMILE', 'lat': '', 'lng': ''},
+    };
+
+    test('the customer to visit comes from the collection fields', () {
+      final task = TaskItem.fromJson(raw);
+      expect(task.isReverse, isTrue);
+      expect(task.customerName, 'Yousuf Yousuf');
+      expect(task.customerPhone, '+966567493611');
+      expect(task.storeName, 'ARABIANMILE');
+      expect(task.latitude, 27.12284655);
+      expect(task.longitude, 49.54458873);
+      expect(task.address, contains('7474'));
+      expect(NationalAddressUtils.customerShortAddress(task.raw), 'ETAB7474');
+    });
+
+    test('a normal delivery is unchanged', () {
+      final forward = Map<String, dynamic>.from(raw)..['order_type'] = 'forward';
+      final task = TaskItem.fromJson(forward);
+      expect(task.isReverse, isFalse);
+      expect(task.customerPhone, '+966581896940');
+      expect(task.latitude, 27.12266456);
+      expect(NationalAddressUtils.customerShortAddress(task.raw), 'ETAA7454');
     });
   });
 }
