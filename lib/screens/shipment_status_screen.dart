@@ -21,6 +21,7 @@ import '../utils/national_address_utils.dart';
 import '../utils/status_verification.dart';
 import '../widgets/location_correction_dialog.dart';
 import '../widgets/top_toast.dart';
+import '../services/status_send_queue.dart';
 import 'scanner_screen.dart';
 
 enum ShipmentStatusMode { all, deliveredOnly, nonDeliveredOnly }
@@ -547,6 +548,13 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   Future<void> _submit() async {
     final selected = _selected;
     if (selected == null) return;
+    final pendingAwb = (widget.awbOverride?.trim().isNotEmpty ?? false)
+        ? widget.awbOverride!.trim()
+        : widget.task.realAwb.trim();
+    if (StatusSendQueue.instance.isSending(pendingAwb)) {
+      _validation('هذه الشحنة قيد الإرسال للسيرفر الآن. انتظر النتيجة.');
+      return;
+    }
     final displayLabel = _optionDisplayLabel(selected);
     final label = _optionApiLabel(selected);
     final delivered = _isDeliveredOption(selected);
@@ -722,88 +730,152 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                 : 'Not required');
 
       debugPrint('bulk/status called: true');
-      try {
-        await _api.updateStatus(
-          officialBody: body,
-          assigneeId: assigneeId,
-          latitude: latitude,
-          longitude: longitude,
-        );
-      } on ScanApiException catch (error) {
-        // No reply at all (timeout / connection dropped): the server may
-        // still have applied the update. Check before reporting a failure,
-        // so the driver does not send the same status twice.
-        if (error.statusCode != null) rethrow;
-        if (mounted) setState(() => _step = 'لم يرد السيرفر، جارٍ التحقق…');
-        final applied = await _verifyOnServer(
-          awb: awb,
-          statusId: statusId,
-          delivered: delivered,
-          latitude: latitude,
-          longitude: longitude,
-        );
-        _diagnostics.setContext(
-          'No-reply check',
-          applied ? 'applied on server' : 'not applied: $error',
-        );
-        if (!applied) rethrow;
-      }
-      debugPrint('bulk/status HTTP status: 200');
-      debugPrint('bulk/status response success: true');
-      mark('send');
-
-      _diagnostics.setContext(
-        'Image upload status',
-        _image == null ? 'Not required/selected' : 'Uploaded',
-      );
-      _diagnostics.setContext('Submit timings', timings.join(', '));
-      _verifiedStatusOnServer = 'قبل السيرفر الحالة، جارٍ التأكد منها';
-
-      if (delivered) {
-        // Local history only; it must not delay closing the screen.
-        unawaited(DeliveryHistoryStore.instance.recordCompleted(
-          widget.task,
-          awb: awb,
-        ));
-      }
-      widget.onUpdated?.call();
       if (!mounted) return;
-
-      // The server accepted the update: close right away, then confirm in
-      // the background by reading the shipment back (GET only) and report
-      // the result at the top of the screen.
       final overlay = Overlay.of(context, rootOverlay: true);
       final shipmentLabel = awb.isEmpty ? '' : ' $awb';
-      TopToast.showOn(
-        overlay,
-        'تم الإرسال، جارٍ التأكد من السيرفر…$shipmentLabel',
-        kind: TopToastKind.warning,
-        duration: const Duration(seconds: 8),
-      );
-      Navigator.of(context).pop(true);
+      final sendWatch = Stopwatch()..start();
 
-      unawaited(() async {
-        final verifyWatch = Stopwatch()..start();
-        final verified = await _verifyOnServer(
-          awb: awb,
-          statusId: statusId,
-          delivered: delivered,
-          latitude: latitude,
-          longitude: longitude,
+      // Sends the update and confirms it on the server. Diagnostics showed
+      // SLS applies a delivery within ~1s but replies after 20-25s+, so
+      // while the reply is pending the shipment is read back (GET, every
+      // 1.5s) and the update counts as done as soon as it shows the new
+      // status. The request itself is sent once and left to finish.
+      Future<StatusSendOutcome> work() async {
+        Object? postError;
+        var postDone = false;
+        unawaited(
+          _api
+              .updateStatus(
+                officialBody: body,
+                assigneeId: assigneeId,
+                latitude: latitude,
+                longitude: longitude,
+              )
+              .then(
+                (_) => postDone = true,
+                onError: (Object error) {
+                  postError = error;
+                  postDone = true;
+                },
+              ),
         );
-        _diagnostics.setContext(
-          'Submit timings',
-          '${timings.join(', ')}, verify ${verifyWatch.elapsedMilliseconds}ms '
-              '(${verified ? 'confirmed' : 'not shown yet'})',
-        );
+
+        void logTimings(String how) => _diagnostics.setContext(
+              'Submit timings',
+              '${timings.join(', ')}, $how ${sendWatch.elapsedMilliseconds}ms',
+            );
+
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        while (true) {
+          if (postDone) {
+            final error = postError;
+            if (error == null) {
+              final confirmed = await _verifyOnServer(
+                awb: awb,
+                statusId: statusId,
+                delivered: delivered,
+                latitude: latitude,
+                longitude: longitude,
+              );
+              logTimings(confirmed ? 'reply+confirmed' : 'reply, not shown yet');
+              return StatusSendOutcome.success(confirmed: confirmed);
+            }
+            // An answer from the server (HTTP error) is a real refusal.
+            if (error is ScanApiException && error.statusCode != null) {
+              logTimings('refused');
+              return StatusSendOutcome.failure(error);
+            }
+            // No reply at all: the server may still have applied it.
+            final applied = await _verifyOnServer(
+              awb: awb,
+              statusId: statusId,
+              delivered: delivered,
+              latitude: latitude,
+              longitude: longitude,
+            );
+            logTimings(applied ? 'no reply, confirmed' : 'no reply, not applied');
+            return applied
+                ? const StatusSendOutcome.success(confirmed: true)
+                : StatusSendOutcome.failure(error);
+          }
+          if (await _shipmentShowsStatus(awb, statusId, delivered)) {
+            logTimings('confirmed while waiting for reply');
+            return const StatusSendOutcome.success(confirmed: true);
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 1500));
+        }
+      }
+
+      String resultMessage(StatusSendOutcome outcome) => outcome.confirmed
+          ? 'تم التأكيد من السيرفر ✓ $displayLabel$shipmentLabel'
+          : 'أُرسلت الحالة وقبلها السيرفر، لكنها لم تظهر بعد على الشحنة$shipmentLabel. تحقق منها بعد قليل قبل إعادة الإرسال.';
+
+      final job = StatusSendQueue.instance.start(
+        awb: awb,
+        label: displayLabel,
+        work: work,
+        onSuccess: (outcome) async {
+          _diagnostics.setContext(
+            'Image upload status',
+            _image == null ? 'Not required/selected' : 'Uploaded',
+          );
+          if (delivered) {
+            await DeliveryHistoryStore.instance.recordCompleted(
+              widget.task,
+              awb: awb,
+            );
+          }
+          widget.onUpdated?.call();
+        },
+      );
+
+      // Usually confirmed within 1-2s. If not within 8s, the screen closes
+      // and the send finishes in the background (bar on the home screen;
+      // the result appears at the top).
+      StatusSendOutcome outcome;
+      try {
+        outcome = await job.future.timeout(const Duration(seconds: 8));
+      } on TimeoutException {
+        job.detached = true;
+        unawaited(job.future.then((late) {
+          TopToast.showOn(
+            overlay,
+            late.ok
+                ? resultMessage(late)
+                : 'لم تُرسل الحالة$shipmentLabel: ${late.error}',
+            kind: late.ok
+                ? (late.confirmed ? TopToastKind.success : TopToastKind.warning)
+                : TopToastKind.error,
+            duration: late.ok ? null : const Duration(seconds: 8),
+          );
+        }));
+        if (!mounted) return;
         TopToast.showOn(
           overlay,
-          verified
-              ? 'تم التأكيد من السيرفر ✓ $displayLabel$shipmentLabel'
-              : 'أُرسلت الحالة وقبلها السيرفر، لكنها لم تظهر بعد على الشحنة$shipmentLabel. تحقق منها بعد قليل قبل إعادة الإرسال.',
-          kind: verified ? TopToastKind.success : TopToastKind.warning,
+          'جارٍ الإرسال في الخلفية…$shipmentLabel  يمكنك المتابعة',
+          kind: TopToastKind.warning,
+          duration: const Duration(seconds: 3),
         );
-      }());
+        Navigator.of(context).pop(true);
+        return;
+      }
+
+      if (!outcome.ok) {
+        final error = outcome.error;
+        if (error is ScanApiException) throw error;
+        throw error ?? const ScanApiException('تعذر إرسال الحالة.');
+      }
+      mark('send');
+      _verifiedStatusOnServer = outcome.confirmed
+          ? 'تم التأكيد من سيرفر SLS: الحالة الجديدة ظاهرة على الشحنة'
+          : 'أُرسلت الحالة وقبلها السيرفر، لكن لم تظهر بعد على الشحنة';
+      if (!mounted) return;
+      TopToast.showOn(
+        overlay,
+        resultMessage(outcome),
+        kind: outcome.confirmed ? TopToastKind.success : TopToastKind.warning,
+      );
+      Navigator.of(context).pop(true);
     } on ScanApiException catch (error) {
       debugPrint('bulk/status called: true');
       debugPrint('bulk/status HTTP status: ${error.statusCode}');
@@ -825,6 +897,25 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
           _step = null;
         });
       }
+    }
+  }
+
+  /// One read of the shipment from SLS (orders/awb, GET): does it already
+  /// show the status that was sent?
+  Future<bool> _shipmentShowsStatus(
+    String awb,
+    Object statusId,
+    bool delivered,
+  ) async {
+    try {
+      final shipment = await _api.scanOrder(awb);
+      return StatusVerification.matches(
+        shipment.raw,
+        sentStatusId: statusId,
+        delivered: delivered,
+      );
+    } catch (_) {
+      return false;
     }
   }
 

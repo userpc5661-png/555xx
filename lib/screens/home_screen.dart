@@ -10,6 +10,7 @@ import '../models/task_item.dart';
 import '../services/api_service.dart';
 import '../services/map_focus_service.dart';
 import '../services/shipment_outcome_tracker.dart';
+import '../services/status_send_queue.dart';
 import '../services/navigation_service.dart';
 import '../services/location_correction_service.dart';
 import '../services/token_store.dart';
@@ -269,6 +270,15 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
+    return Column(
+      children: [
+        const _PendingSendsBar(),
+        Expanded(child: _buildPages()),
+      ],
+    );
+  }
+
+  Widget _buildPages() {
     return Stack(
       children: [
         IndexedStack(
@@ -299,6 +309,87 @@ class _HomeScreenState extends State<HomeScreen> {
             child: LinearProgressIndicator(minHeight: 2),
           ),
       ],
+    );
+  }
+}
+
+/// Status updates still being sent in the background (SLS can take 20s+
+/// to reply), and ones that failed, which stay until dismissed.
+class _PendingSendsBar extends StatelessWidget {
+  const _PendingSendsBar();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<List<StatusSendJob>>(
+      valueListenable: StatusSendQueue.instance.jobs,
+      builder: (context, jobs, _) {
+        final visible = jobs
+            .where((j) => j.detached || j.state == StatusSendState.failed)
+            .toList();
+        if (visible.isEmpty) return const SizedBox.shrink();
+        final sending =
+            visible.where((j) => j.state == StatusSendState.sending).toList();
+        final failed =
+            visible.where((j) => j.state == StatusSendState.failed).toList();
+        return Material(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (sending.isNotEmpty)
+                    Row(
+                      children: [
+                        const SizedBox.square(
+                          dimension: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'جارٍ إرسال ${sending.length}: '
+                            '${sending.map((j) => j.awb).join('، ')}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  for (final job in failed)
+                    Row(
+                      children: [
+                        const Icon(Icons.error, color: Colors.red, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'لم تُرسل ${job.awb} (${job.label}) — افتح الشحنة وأعد الإرسال',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.red,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          tooltip: 'إخفاء',
+                          icon: const Icon(Icons.close, size: 18),
+                          onPressed: () =>
+                              StatusSendQueue.instance.dismiss(job),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
