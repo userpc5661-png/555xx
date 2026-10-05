@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/task_item.dart';
 import '../services/address_geocoding_service.dart';
+import '../services/label_address_resolver.dart';
+import '../services/label_address_store.dart';
+import '../services/label_ocr_service.dart';
 import '../services/location_correction_service.dart';
 import '../services/navigation_service.dart';
 import '../utils/national_address_utils.dart';
@@ -133,6 +137,47 @@ class _LocationCorrectionDialogState extends State<_LocationCorrectionDialog> {
     return CorrectedLocation(position.latitude, position.longitude);
   }
 
+  /// Photographs the label and reads the customer's National Address from
+  /// it (the server's is often wrong). The driver confirms the location.
+  Future<void> _scanLabelPhoto() async {
+    final photo = await ImagePicker().pickImage(
+      source: ImageSource.camera,
+      maxWidth: 2000,
+      imageQuality: 90,
+    );
+    if (photo == null || !mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final scan = await LabelOcrService.readLabel(photo.path);
+      var chosen = await customerShortFromLabel(widget.task, scan);
+      if (!mounted) return;
+      if (chosen == null && scan.shortAddresses.isNotEmpty) {
+        setState(() => _loading = false);
+        chosen = await chooseLabelAddress(context, scan.shortAddresses);
+        if (!mounted) return;
+      }
+      if (chosen == null) {
+        setState(() {
+          _loading = false;
+          _error = 'لم أقرأ عنوانًا وطنيًا من الصورة. قرّب الكاميرا من البوليصة وصوّر مرة أخرى.';
+        });
+        return;
+      }
+      await LabelAddressStore.instance.save(widget.task, chosen);
+      setState(() => _controller.text = chosen!);
+      await _resolveAndSave(useCurrentPosition: false);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'تعذر قراءة الصورة: $error';
+      });
+    }
+  }
+
   /// Fills the field with the customer's short address from the shipment
   /// data when available; otherwise the driver types it from the label.
   Future<void> _useNationalAddress() async {
@@ -231,6 +276,12 @@ class _LocationCorrectionDialogState extends State<_LocationCorrectionDialog> {
                 ),
               ),
               const SizedBox(height: 12),
+              FilledButton.tonalIcon(
+                onPressed: _loading ? null : _scanLabelPhoto,
+                icon: const Icon(Icons.document_scanner_rounded),
+                label: const Text('تصوير البوليصة (العنوان الصحيح)'),
+              ),
+              const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: _loading ? null : _useNationalAddress,
                 icon: const Icon(Icons.local_post_office_outlined),
@@ -272,4 +323,35 @@ class _LocationCorrectionDialogState extends State<_LocationCorrectionDialog> {
       ),
     );
   }
+}
+
+/// Lets the driver pick the customer's address when the label shows more
+/// than one and the sender's could not be told apart.
+Future<String?> chooseLabelAddress(
+  BuildContext context,
+  List<String> candidates,
+) {
+  return showDialog<String>(
+    context: context,
+    builder: (context) => SimpleDialog(
+      title: const Text('أي عنوان للعميل؟'),
+      children: [
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24),
+          child: Text(
+            'اختر العنوان المكتوب تحت "To" في البوليصة.',
+            style: TextStyle(fontSize: 13, color: Colors.grey),
+          ),
+        ),
+        for (final value in candidates)
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, value),
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+          ),
+      ],
+    ),
+  );
 }
