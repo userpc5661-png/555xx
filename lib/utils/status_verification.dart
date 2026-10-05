@@ -37,13 +37,50 @@ class StatusVerification {
     return codes;
   }
 
+  /// A field of [order], top level first, then the nested objects.
+  static String? _field(Map<String, dynamic> order, String key) {
+    for (final map in [
+      order,
+      for (final nested in const ['order', 'shipment', 'data'])
+        if (order[nested] is Map) Map<String, dynamic>.from(order[nested] as Map),
+    ]) {
+      final value = map[key];
+      if (value != null && '$value'.trim().isNotEmpty) return '$value'.trim();
+    }
+    return null;
+  }
+
+  static String _normal(String value) =>
+      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+
+  /// [sentStatusLabel]: the status_label sent. Not-delivered reasons
+  /// (refused, not answering, reschedule…) keep the same status code as
+  /// "Out for delivery" (2, In Transit), so the code alone proves nothing:
+  /// the shipment must show this label. Diagnostics showed SLS writes it
+  /// only when it answers the request. [sentAt]: when it was sent; a label
+  /// that was already there from an earlier update (order updated_at
+  /// before that) does not count.
   static bool matches(
     Map<String, dynamic> order, {
     required Object sentStatusId,
     required bool delivered,
+    String? sentStatusLabel,
+    DateTime? sentAt,
   }) {
     final sent = sentStatusId.toString().trim();
-    if (sent.isNotEmpty && statusCodesIn(order).contains(sent)) return true;
+    final codeMatches = sent.isNotEmpty && statusCodesIn(order).contains(sent);
+    final sentLabel = sentStatusLabel?.trim() ?? '';
+    if (!delivered && sentLabel.isNotEmpty) {
+      if (!codeMatches) return false;
+      final label = _field(order, 'status_label');
+      if (label == null || _normal(label) != _normal(sentLabel)) return false;
+      if (sentAt == null) return true;
+      final updated = DateTime.tryParse(_field(order, 'updated_at') ?? '');
+      // Two minutes of slack for the phone's clock.
+      return updated == null ||
+          !updated.isBefore(sentAt.subtract(const Duration(minutes: 2)));
+    }
+    if (codeMatches) return true;
     if (delivered) {
       final task = TaskItem.fromJson(order);
       final label = '${task.statusCode} ${task.statusLabel}'.toLowerCase();

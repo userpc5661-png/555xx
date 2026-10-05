@@ -740,7 +740,10 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       // while the reply is pending the shipment is read back (GET, every
       // 1.5s) and the update counts as done as soon as it shows the new
       // status. The request itself is sent once and left to finish.
+      // Not-delivered reasons keep status code 2, so for them only the new
+      // status_label counts, and SLS writes it when it replies.
       Future<StatusSendOutcome> work() async {
+        final sentAt = DateTime.now();
         Object? postError;
         var postDone = false;
         unawaited(
@@ -774,6 +777,8 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                 awb: awb,
                 statusId: statusId,
                 delivered: delivered,
+                statusLabel: officialStatusLabel,
+                sentAt: sentAt,
                 latitude: latitude,
                 longitude: longitude,
               );
@@ -793,6 +798,8 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
               awb: awb,
               statusId: statusId,
               delivered: delivered,
+              statusLabel: officialStatusLabel,
+              sentAt: sentAt,
               latitude: latitude,
               longitude: longitude,
             );
@@ -801,7 +808,13 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                 ? const StatusSendOutcome.success(confirmed: true)
                 : StatusSendOutcome.failure(error);
           }
-          if (await _shipmentShowsStatus(awb, statusId, delivered)) {
+          if (await _shipmentShowsStatus(
+            awb,
+            statusId,
+            delivered,
+            statusLabel: officialStatusLabel,
+            sentAt: sentAt,
+          )) {
             logTimings('confirmed while waiting for reply');
             return const StatusSendOutcome.success(confirmed: true);
           }
@@ -908,14 +921,18 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   Future<bool> _shipmentShowsStatus(
     String awb,
     Object statusId,
-    bool delivered,
-  ) async {
+    bool delivered, {
+    required String statusLabel,
+    required DateTime sentAt,
+  }) async {
     try {
       final shipment = await _api.scanOrder(awb);
       return StatusVerification.matches(
         shipment.raw,
         sentStatusId: statusId,
         delivered: delivered,
+        sentStatusLabel: statusLabel,
+        sentAt: sentAt,
       );
     } catch (_) {
       return false;
@@ -930,6 +947,8 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
     required String awb,
     required Object statusId,
     required bool delivered,
+    required String statusLabel,
+    required DateTime sentAt,
     double? latitude,
     double? longitude,
   }) async {
@@ -940,6 +959,8 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
           shipment.raw,
           sentStatusId: statusId,
           delivered: delivered,
+          sentStatusLabel: statusLabel,
+          sentAt: sentAt,
         )) {
           return true;
         }
@@ -960,6 +981,8 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                 task.raw,
                 sentStatusId: statusId,
                 delivered: delivered,
+                sentStatusLabel: statusLabel,
+                sentAt: sentAt,
               )) {
             return true;
           }
