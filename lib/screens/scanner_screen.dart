@@ -9,6 +9,7 @@ import '../models/scan_models.dart';
 import '../models/task_item.dart';
 import '../repositories/scan_repository.dart';
 import '../services/developer_diagnostics_service.dart';
+import '../services/label_address_resolver.dart';
 import '../services/scan_api_service.dart';
 import 'shipment_status_screen.dart';
 
@@ -34,7 +35,15 @@ class _ScannerScreenState extends State<ScannerScreen>
     autoStart: true,
     facing: CameraFacing.back,
     detectionSpeed: DetectionSpeed.normal,
+    // The frame of each detected barcode is kept so the label's National
+    // Address can be read from it; a sharper frame reads small text better.
+    returnImage: true,
+    cameraResolution: const Size(1920, 1080),
   );
+  Uint8List? _lastFrame;
+  int _labelsCorrected = 0;
+  int _labelsUnread = 0;
+  String? _lastLabelNote;
   late final ScanRepository _repository;
 
   late final _ScanMode _mode;
@@ -216,6 +225,7 @@ class _ScannerScreenState extends State<ScannerScreen>
     if (code == null) return;
 
     _handled = true;
+    _lastFrame = capture.image;
     await _controller.stop();
     if (!mounted) return;
     setState(() {
@@ -633,6 +643,10 @@ class _ScannerScreenState extends State<ScannerScreen>
       rethrow;
     }
     final confirmed = shipment;
+    final frame = _lastFrame;
+    if (frame != null) {
+      unawaited(_readLabel(frame, awb, confirmed.raw));
+    }
     if (!mounted) return;
     setState(() {
       _confirmedAwbs.add(awb);
@@ -651,6 +665,36 @@ class _ScannerScreenState extends State<ScannerScreen>
       SnackBar(content: Text('تم تأكيد الشحنة $awb')),
     );
     await _controller.start();
+  }
+
+  /// Reads the customer's National Address from the scanned label in the
+  /// background; the scan itself is not slowed down.
+  Future<void> _readLabel(
+    Uint8List frame,
+    String awb,
+    Map<String, dynamic> order,
+  ) async {
+    final result = await readLabelFromScanFrame(
+      jpeg: frame,
+      code: awb,
+      order: order,
+    );
+    if (!mounted) return;
+    setState(() {
+      switch (result.status) {
+        case LabelCaptureStatus.corrected:
+          _labelsCorrected++;
+          _lastLabelNote = '📍 $awb: العنوان الصحيح ${result.shortAddress}';
+        case LabelCaptureStatus.sameAsServer:
+          _lastLabelNote = '✓ $awb: عنوان السيرفر صحيح';
+        case LabelCaptureStatus.notLocated:
+          _labelsUnread++;
+          _lastLabelNote = '$awb: قُرئ ${result.shortAddress} ولم يُحدد موقعه';
+        case LabelCaptureStatus.unreadable:
+          _labelsUnread++;
+          _lastLabelNote = '$awb: لم أقرأ العنوان، خلّ البوليصة كاملة في الكاميرا';
+      }
+    });
   }
 
   Future<void> _executeLinehaulAction() async {
@@ -897,6 +941,17 @@ class _ScannerScreenState extends State<ScannerScreen>
                                 : _confirmedCount / _orderGroup!.orders.length,
                           ),
                           const SizedBox(height: 6),
+                          if (_lastLabelNote != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text(
+                                '$_lastLabelNote\n'
+                                'مواقع صُححت من البوالص: $_labelsCorrected'
+                                '${_labelsUnread > 0 ? '  •  لم تُقرأ: $_labelsUnread' : ''}',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
                           ConstrainedBox(
                             constraints: const BoxConstraints(maxHeight: 170),
                             child: _GroupOrdersList(

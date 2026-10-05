@@ -106,6 +106,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _contactController.scheduleNextReminder();
 
       SuspiciousAddresses.update(tasks);
+      // Label addresses read while scanning become the customers' locations.
+      unawaited(LabelAddressStore.instance.applyToTasks(tasks));
       setState(() {
         _tasks = tasks;
         _error = null;
