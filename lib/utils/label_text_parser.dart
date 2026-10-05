@@ -72,10 +72,22 @@ class LabelTextParser {
   /// The customer's address among [scan]'s: drops the sender's
   /// ([senderShort], from the server's collection_location_na_short).
   /// Returns null when it is still ambiguous, so the driver chooses.
-  static String? customerShort(LabelScan scan, {String? senderShort}) {
+  static String? customerShort(
+    LabelScan scan, {
+    String? senderShort,
+    String? serverCustomerShort,
+  }) {
     final candidates = scan.shortAddresses
         .where((value) => value != senderShort)
         .toList();
-    return candidates.length == 1 ? candidates.first : null;
+    if (candidates.length == 1) return candidates.first;
+    if (candidates.isEmpty || serverCustomerShort == null) return null;
+    // The server's customer address may be a wrong default, but it is in
+    // the right region (first letter, e.g. E = Eastern); the sender is
+    // usually elsewhere (R = Riyadh).
+    final region = serverCustomerShort[0];
+    final sameRegion =
+        candidates.where((value) => value.startsWith(region)).toList();
+    return sameRegion.length == 1 ? sameRegion.first : null;
   }
 }

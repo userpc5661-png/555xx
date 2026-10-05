@@ -79,14 +79,10 @@ class LabelCaptureResult {
   const LabelCaptureResult(this.status, [this.shortAddress]);
 }
 
-/// Reads the label in a frame captured while scanning a shipment barcode
-/// and stores the customer's National Address (and its location when it
-/// differs from the server's) under the shipment's numbers. The task list
-/// applies it once the shipment appears there. Runs in the background;
-/// never throws.
-Future<LabelCaptureResult> readLabelFromScanFrame({
+/// Reads the customer's National Address from a camera frame of the label
+/// (on device). Null when it cannot be read clearly enough.
+Future<String?> readCustomerShortFromFrame({
   required Uint8List jpeg,
-  required String code,
   required Map<String, dynamic> order,
 }) async {
   File? file;
@@ -96,36 +92,47 @@ Future<LabelCaptureResult> readLabelFromScanFrame({
     );
     await file.writeAsBytes(jpeg, flush: true);
     final scan = await LabelOcrService.readLabel(file.path);
-    final task = TaskItem.fromJson(order);
-    final sender = await labelSenderShort(task);
+    final sender = await labelSenderShort(TaskItem.fromJson(order));
     final server = NationalAddressUtils.customerShortAddress(order);
-    var chosen = LabelTextParser.customerShort(scan, senderShort: sender);
-    if (chosen == null) {
-      // Two left and one is the server's: the label's other one wins only
-      // if the server's is not printed; otherwise the server's is right.
-      final others = scan.shortAddresses.where((v) => v != sender).toList();
-      if (server != null && others.contains(server)) chosen = server;
-    }
-    if (chosen == null) return const LabelCaptureResult(LabelCaptureStatus.unreadable);
-
-    final ids = LabelAddressStore.idsOfOrder(order, code);
-    if (chosen == server) {
-      await LabelAddressStore.instance.saveForIds(ids, chosen);
-      return LabelCaptureResult(LabelCaptureStatus.sameAsServer, chosen);
-    }
-    final location = await AddressGeocodingService.locate(chosen);
-    await LabelAddressStore.instance.saveForIds(ids, chosen, location: location);
-    return LabelCaptureResult(
-      location == null
-          ? LabelCaptureStatus.notLocated
-          : LabelCaptureStatus.corrected,
-      chosen,
+    return LabelTextParser.customerShort(
+      scan,
+      senderShort: sender,
+      serverCustomerShort: server,
     );
   } catch (_) {
-    return const LabelCaptureResult(LabelCaptureStatus.unreadable);
+    return null;
   } finally {
     try {
       await file?.delete();
     } catch (_) {}
+  }
+}
+
+/// Stores the label's address under all of the shipment's numbers, with
+/// its location when it differs from the server's. The task list applies
+/// it once the shipment appears there. Never throws.
+Future<LabelCaptureResult> storeLabelAddress({
+  required String code,
+  required Map<String, dynamic> order,
+  required String shortAddress,
+}) async {
+  try {
+    final ids = LabelAddressStore.idsOfOrder(order, code);
+    final server = NationalAddressUtils.customerShortAddress(order);
+    if (shortAddress == server) {
+      await LabelAddressStore.instance.saveForIds(ids, shortAddress);
+      return LabelCaptureResult(LabelCaptureStatus.sameAsServer, shortAddress);
+    }
+    final location = await AddressGeocodingService.locate(shortAddress);
+    await LabelAddressStore.instance
+        .saveForIds(ids, shortAddress, location: location);
+    return LabelCaptureResult(
+      location == null
+          ? LabelCaptureStatus.notLocated
+          : LabelCaptureStatus.corrected,
+      shortAddress,
+    );
+  } catch (_) {
+    return LabelCaptureResult(LabelCaptureStatus.notLocated, shortAddress);
   }
 }

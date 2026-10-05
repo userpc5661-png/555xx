@@ -44,6 +44,13 @@ class _ScannerScreenState extends State<ScannerScreen>
   int _labelsCorrected = 0;
   int _labelsUnread = 0;
   String? _lastLabelNote;
+  bool _lastLabelOk = true;
+  // Group scan: a shipment is confirmed only once its label's National
+  // Address is read (or the driver confirms without it after 3 tries).
+  static const _labelAttemptsBeforeOverride = 3;
+  final Map<String, int> _labelAttempts = {};
+  final Map<String, ScannedShipment> _shipmentCache = {};
+  final Map<String, String> _labelByOrderKey = {};
   late final ScanRepository _repository;
 
   late final _ScanMode _mode;
@@ -93,6 +100,18 @@ class _ScannerScreenState extends State<ScannerScreen>
   }
 
   /// Display only: whether [order] was scanned (now or before this session).
+  String? _labelOf(GroupOrder order) {
+    for (final key in {
+      _key(order.referenceNumber),
+      _key(order.orderId),
+      if (order.id != null) '${order.id}',
+    }) {
+      final value = _labelByOrderKey[key];
+      if (value != null) return value;
+    }
+    return null;
+  }
+
   bool _isOrderScanned(GroupOrder order) {
     if (order.isConfirmed) return true;
     final keys = {
@@ -623,8 +642,33 @@ class _ScannerScreenState extends State<ScannerScreen>
     // Same requests as before; a failure is only recorded for the list
     // ("scanned but not in this group") and then shown as usual.
     ScannedShipment? shipment;
+    String? labelAddress;
     try {
-      shipment = await _repository.scanOrder(awb);
+      shipment = _shipmentCache[awb] ??= await _repository.scanOrder(awb);
+
+      final frame = _lastFrame;
+      if (mounted) setState(() => _lastLabelNote = 'جارٍ قراءة العنوان الوطني…');
+      labelAddress = frame == null
+          ? null
+          : await readCustomerShortFromFrame(jpeg: frame, order: shipment.raw);
+      if (labelAddress == null) {
+        final attempts = (_labelAttempts[awb] ?? 0) + 1;
+        _labelAttempts[awb] = attempts;
+        if (attempts < _labelAttemptsBeforeOverride) {
+          await _retryLabel(
+            'لم يُقرأ العنوان الوطني لـ $awb (محاولة $attempts من '
+            '$_labelAttemptsBeforeOverride). خلّ البوليصة كاملة وواضحة داخل الإطار.',
+          );
+          return;
+        }
+        final confirmWithout = await _askConfirmWithoutAddress(awb);
+        if (!confirmWithout) {
+          _labelAttempts[awb] = 0;
+          await _retryLabel('صوّر البوليصة مرة أخرى داخل الإطار.');
+          return;
+        }
+      }
+
       await _repository.confirmOrder(
         groupId: group.id,
         orderId: shipment.id,
@@ -643,56 +687,115 @@ class _ScannerScreenState extends State<ScannerScreen>
       rethrow;
     }
     final confirmed = shipment;
-    final frame = _lastFrame;
-    if (frame != null) {
-      unawaited(_readLabel(frame, awb, confirmed.raw));
+    _labelAttempts.remove(awb);
+    _shipmentCache.remove(awb);
+    final orderKeys = {
+      _key(awb),
+      _key(confirmed.referenceNumber),
+      _key(confirmed.actualAwb),
+      '${confirmed.id}',
+    }..remove('');
+    final address = labelAddress;
+    if (address != null) {
+      for (final key in orderKeys) {
+        _labelByOrderKey[key] = address;
+      }
+      unawaited(_storeLabel(awb, confirmed.raw, address));
     }
     if (!mounted) return;
     setState(() {
       _confirmedAwbs.add(awb);
-      _confirmedOrderKeys.addAll({
-        _key(awb),
-        _key(confirmed.referenceNumber),
-        _key(confirmed.actualAwb),
-        '${confirmed.id}',
-      }..remove(''));
+      _confirmedOrderKeys.addAll(orderKeys);
       _locallyConfirmedCount += 1;
+      if (address == null) {
+        _labelsUnread++;
+        _lastLabelNote = '$awb: أُكدت بدون عنوان وطني';
+        _lastLabelOk = false;
+      } else {
+        _lastLabelNote = '✓ $awb: $address';
+        _lastLabelOk = true;
+      }
       _busy = false;
       _lastCode = null;
       _handled = false;
     });
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('تم تأكيد الشحنة $awb')),
+      SnackBar(
+        duration: const Duration(milliseconds: 1200),
+        content: Text(
+          address == null
+              ? 'تم تأكيد الشحنة $awb (بدون عنوان)'
+              : 'تم تأكيد الشحنة $awb — $address',
+        ),
+      ),
     );
     await _controller.start();
   }
 
-  /// Reads the customer's National Address from the scanned label in the
-  /// background; the scan itself is not slowed down.
-  Future<void> _readLabel(
-    Uint8List frame,
+  /// Keeps scanning the same label: the next frames are read again.
+  Future<void> _retryLabel(String message) async {
+    if (!mounted) return;
+    setState(() {
+      _lastLabelNote = message;
+      _lastLabelOk = false;
+      _busy = false;
+      _lastCode = null;
+      _handled = false;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    if (mounted) await _controller.start();
+  }
+
+  Future<bool> _askConfirmWithoutAddress(String awb) async {
+    if (!mounted) return false;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('لم يُقرأ العنوان الوطني'),
+        content: Text(
+          'حاولت $_labelAttemptsBeforeOverride مرات ولم أقرأ العنوان الوطني '
+          'للشحنة $awb.\nإذا كانت البوليصة تالفة أو بلا عنوان يمكنك التأكيد '
+          'بدونه، وتصحيح الموقع لاحقًا من "تصوير البوليصة".',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إعادة المحاولة'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('تأكيد بدون عنوان'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  /// Stores the label address and its location in the background.
+  Future<void> _storeLabel(
     String awb,
     Map<String, dynamic> order,
+    String address,
   ) async {
-    final result = await readLabelFromScanFrame(
-      jpeg: frame,
+    final result = await storeLabelAddress(
       code: awb,
       order: order,
+      shortAddress: address,
     );
     if (!mounted) return;
     setState(() {
       switch (result.status) {
         case LabelCaptureStatus.corrected:
           _labelsCorrected++;
-          _lastLabelNote = '📍 $awb: العنوان الصحيح ${result.shortAddress}';
+          _lastLabelNote = '📍 $awb: موقع صُحح من البوليصة $address';
+          _lastLabelOk = true;
         case LabelCaptureStatus.sameAsServer:
-          _lastLabelNote = '✓ $awb: عنوان السيرفر صحيح';
+          break;
         case LabelCaptureStatus.notLocated:
-          _labelsUnread++;
-          _lastLabelNote = '$awb: قُرئ ${result.shortAddress} ولم يُحدد موقعه';
         case LabelCaptureStatus.unreadable:
-          _labelsUnread++;
-          _lastLabelNote = '$awb: لم أقرأ العنوان، خلّ البوليصة كاملة في الكاميرا';
+          _lastLabelNote = '$awb: قُرئ $address ولم يُحدد موقعه بعد';
+          _lastLabelOk = false;
       }
     });
   }
@@ -759,6 +862,7 @@ class _ScannerScreenState extends State<ScannerScreen>
               Flexible(child: _GroupOrdersList(
                 orders: group.orders,
                 isScanned: _isOrderScanned,
+                labelOf: _labelOf,
                 notInGroup: _notInGroup,
               )),
             ],
@@ -827,6 +931,7 @@ class _ScannerScreenState extends State<ScannerScreen>
                   child: _GroupOrdersList(
                     orders: group.orders,
                     isScanned: _isOrderScanned,
+                labelOf: _labelOf,
                     notInGroup: _notInGroup,
                   ),
                 ),
@@ -886,16 +991,53 @@ class _ScannerScreenState extends State<ScannerScreen>
           },
           errorBuilder: _buildCameraError,
         ),
-        Center(
-          child: Container(
-            width: 270,
-            height: 210,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.white, width: 3),
-              borderRadius: BorderRadius.circular(20),
+        if (_orderGroup != null)
+          // Portrait 10x15 cm label: the whole label, not only the barcode,
+          // must be in view so its National Address can be read.
+          Align(
+            alignment: const Alignment(0, -0.75),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final width = MediaQuery.of(context).size.width * 0.6;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: width,
+                      height: width * 1.5,
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: _lastLabelOk ? Colors.white : Colors.orange,
+                          width: 3,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'خلّ البوليصة كاملة داخل الإطار',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        shadows: [Shadow(blurRadius: 4)],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          )
+        else
+          Center(
+            child: Container(
+              width: 270,
+              height: 210,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 3),
+                borderRadius: BorderRadius.circular(20),
+              ),
             ),
           ),
-        ),
         Positioned(
           left: 16,
           right: 16,
@@ -947,9 +1089,15 @@ class _ScannerScreenState extends State<ScannerScreen>
                               child: Text(
                                 '$_lastLabelNote\n'
                                 'مواقع صُححت من البوالص: $_labelsCorrected'
-                                '${_labelsUnread > 0 ? '  •  لم تُقرأ: $_labelsUnread' : ''}',
+                                '${_labelsUnread > 0 ? '  •  بدون عنوان: $_labelsUnread' : ''}',
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(fontSize: 12),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: _lastLabelOk
+                                      ? Colors.green.shade700
+                                      : Colors.orange.shade800,
+                                ),
                               ),
                             ),
                           ConstrainedBox(
@@ -957,6 +1105,7 @@ class _ScannerScreenState extends State<ScannerScreen>
                             child: _GroupOrdersList(
                               orders: _orderGroup!.orders,
                               isScanned: _isOrderScanned,
+                labelOf: _labelOf,
                               notInGroup: _notInGroup,
                               compact: true,
                             ),
@@ -1066,10 +1215,12 @@ class _GroupOrdersList extends StatelessWidget {
   final bool Function(GroupOrder) isScanned;
   final List<_NotInGroupScan> notInGroup;
   final bool compact;
+  final String? Function(GroupOrder)? labelOf;
 
   const _GroupOrdersList({
     required this.orders,
     required this.isScanned,
+    this.labelOf,
     this.notInGroup = const [],
     this.compact = false,
   });
@@ -1115,7 +1266,7 @@ class _GroupOrdersList extends StatelessWidget {
           number: _number(order),
           color: Colors.green,
           icon: Icons.check_circle,
-          note: 'تم المسح',
+          note: labelOf?.call(order) ?? 'تم المسح',
           strike: false,
           compact: compact,
         ),
