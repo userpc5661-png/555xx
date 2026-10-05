@@ -80,6 +80,9 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
 
   /// What the send button is doing right now (sending / verifying).
   String? _step;
+  // Seconds shown on the send button while waiting for SLS.
+  Timer? _waitTicker;
+  int _waitSeconds = 0;
 
   // Diagnostics fields
   Map<String, dynamic>? _lastPayload;
@@ -104,6 +107,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
 
   @override
   void dispose() {
+    _waitTicker?.cancel();
     _nationalAddress.dispose();
     _otp.dispose();
     super.dispose();
@@ -628,6 +632,11 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       watch.reset();
     }
 
+    _waitTicker?.cancel();
+    _waitSeconds = 0;
+    _waitTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _waitSeconds++);
+    });
     setState(() {
       _submitting = true;
       _step = 'جارٍ الإرسال إلى السيرفر…';
@@ -713,12 +722,32 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                 : 'Not required');
 
       debugPrint('bulk/status called: true');
-      final result = await _api.updateStatus(
-        officialBody: body,
-        assigneeId: assigneeId,
-        latitude: latitude,
-        longitude: longitude,
-      );
+      try {
+        await _api.updateStatus(
+          officialBody: body,
+          assigneeId: assigneeId,
+          latitude: latitude,
+          longitude: longitude,
+        );
+      } on ScanApiException catch (error) {
+        // No reply at all (timeout / connection dropped): the server may
+        // still have applied the update. Check before reporting a failure,
+        // so the driver does not send the same status twice.
+        if (error.statusCode != null) rethrow;
+        if (mounted) setState(() => _step = 'لم يرد السيرفر، جارٍ التحقق…');
+        final applied = await _verifyOnServer(
+          awb: awb,
+          statusId: statusId,
+          delivered: delivered,
+          latitude: latitude,
+          longitude: longitude,
+        );
+        _diagnostics.setContext(
+          'No-reply check',
+          applied ? 'applied on server' : 'not applied: $error',
+        );
+        if (!applied) rethrow;
+      }
       debugPrint('bulk/status HTTP status: 200');
       debugPrint('bulk/status response success: true');
       mark('send');
@@ -789,6 +818,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       if (!mounted) return;
       TopToast.show(context, error.toString(), kind: TopToastKind.error);
     } finally {
+      _waitTicker?.cancel();
       if (mounted) {
         setState(() {
           _submitting = false;
@@ -1131,7 +1161,9 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
                       )
                     : const Icon(Icons.check_circle_outline),
                 label: Text(
-                  _submitting ? (_step ?? 'جارٍ الإرسال…') : 'إرسال التحديث',
+                  _submitting
+                      ? '${_step ?? 'جارٍ الإرسال…'}${_waitSeconds > 0 ? ' $_waitSecondsث' : ''}'
+                      : 'إرسال التحديث',
                 ),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size(double.infinity, 56),

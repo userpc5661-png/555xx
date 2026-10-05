@@ -246,7 +246,16 @@ class ScanApiService {
     if (longitude != null) body['lng'] = longitude.toString();
 
     return _action(
-      await _post(ScanApiConfig.bulkStatus, data: FormData.fromMap(body)),
+      await _post(
+        ScanApiConfig.bulkStatus,
+        data: FormData.fromMap(body),
+        // SLS can take 20s+ to answer bulk/status. Cutting it at 25s showed
+        // a failure for updates the server had actually applied.
+        options: Options(
+          sendTimeout: const Duration(seconds: 60),
+          receiveTimeout: const Duration(seconds: 90),
+        ),
+      ),
     );
   }
 
