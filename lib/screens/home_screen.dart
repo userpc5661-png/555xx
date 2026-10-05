@@ -9,6 +9,7 @@ import 'package:maplibre/maplibre.dart' as ml;
 import '../models/task_item.dart';
 import '../services/api_service.dart';
 import '../services/map_focus_service.dart';
+import '../services/shipment_outcome_tracker.dart';
 import '../services/navigation_service.dart';
 import '../services/location_correction_service.dart';
 import '../services/token_store.dart';
@@ -18,7 +19,6 @@ import '../widgets/task_card.dart';
 import '../services/local_contact_controller.dart';
 import '../services/local_contact_store.dart';
 import '../services/local_shipment_status_store.dart';
-import '../services/delivery_history_store.dart';
 import 'login_screen.dart';
 import 'scanner_screen.dart';
 import 'settings_screen.dart';
@@ -105,6 +105,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _tasks = tasks;
         _error = null;
       });
+      // Records deliveries/closures from the server (incl. the official
+      // app) for the counters; runs in the background.
+      unawaited(ShipmentOutcomeTracker.instance.sync(tasks, widget.token));
     } catch (error) {
       if (error is ApiException &&
           (error.statusCode == 401 || error.statusCode == 403)) {
@@ -304,12 +307,19 @@ class _DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<_DashboardPage> {
-  List<DeliveryHistoryRecord> _history = const [];
+  OutcomeCounts? _counts;
 
   @override
   void initState() {
     super.initState();
+    ShipmentOutcomeTracker.instance.revision.addListener(_loadHistory);
     _loadHistory();
+  }
+
+  @override
+  void dispose() {
+    ShipmentOutcomeTracker.instance.revision.removeListener(_loadHistory);
+    super.dispose();
   }
 
   @override
@@ -319,8 +329,9 @@ class _DashboardPageState extends State<_DashboardPage> {
   }
 
   Future<void> _loadHistory() async {
-    final history = await DeliveryHistoryStore.instance.today();
-    if (mounted) setState(() => _history = history);
+    final counts =
+        await ShipmentOutcomeTracker.instance.countsFor(widget.tasks);
+    if (mounted) setState(() => _counts = counts);
   }
 
   Future<void> _refresh() async {
@@ -333,20 +344,12 @@ class _DashboardPageState extends State<_DashboardPage> {
     final remaining = widget.tasks
         .where((task) => task.progress == TaskProgress.remaining)
         .length;
-    final serverCompleted = widget.tasks
-        .where((task) => task.progress == TaskProgress.completed)
-        .length;
-    // History records are stored by realAwb (falling back to displayReference).
-    final currentAwbs = {
-      for (final task in widget.tasks) ...[
-        task.realAwb.trim(),
-        task.displayReference,
-      ],
-    };
-    final localCompleted = _history
-        .where((record) => !currentAwbs.contains(record.awb))
-        .length;
-    final completed = serverCompleted + localCompleted;
+    // /tasks lists only shipments still on hand; finished ones come from
+    // the server lookups recorded by ShipmentOutcomeTracker.
+    final counts = _counts;
+    final deliveredToday = counts?.deliveredToday ?? 0;
+    final closedToday = counts?.closedToday ?? 0;
+    final localCompleted = deliveredToday + closedToday;
     final cash = widget.tasks
         .where((t) => t.paymentKind == PaymentKind.cashOnDelivery)
         .length;
@@ -416,8 +419,8 @@ class _DashboardPageState extends State<_DashboardPage> {
             childAspectRatio: 1.5,
             children: [
               _MetricCard(
-                title: 'شحنات منجزة',
-                value: '$completed',
+                title: 'تم التوصيل اليوم',
+                value: '$deliveredToday',
                 icon: Icons.check_circle_rounded,
                 color: Colors.green,
               ),
@@ -427,14 +430,31 @@ class _DashboardPageState extends State<_DashboardPage> {
                 icon: Icons.pending_rounded,
                 color: Colors.orange,
               ),
+              _MetricCard(
+                title: 'مغلقة اليوم',
+                value: '$closedToday',
+                icon: Icons.block_rounded,
+                color: Colors.red,
+              ),
+              _MetricCard(
+                title: 'توصيل هذا الشهر',
+                value: '${counts?.deliveredMonth ?? 0}',
+                icon: Icons.calendar_month_rounded,
+                color: Colors.blue,
+              ),
             ],
           ),
 
           const SizedBox(height: 24),
           _SummaryListTile(
-            title: 'إجمالي الشحنات',
+            title: 'إجمالي شحنات اليوم',
             value: '${widget.tasks.length + localCompleted}',
             icon: Icons.inventory_2_rounded,
+          ),
+          _SummaryListTile(
+            title: 'مغلقة هذا الشهر',
+            value: '${counts?.closedMonth ?? 0}',
+            icon: Icons.event_busy_rounded,
           ),
           _SummaryListTile(
             title: 'شحنات الكاش',

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/task_item.dart';
 import '../services/delivery_history_store.dart';
 import '../services/driver_preferences_store.dart';
+import '../services/shipment_outcome_tracker.dart';
 import '../theme/theme_controller.dart';
 import 'developer_diagnostics_screen.dart';
 
@@ -338,53 +339,30 @@ class _ServerStatsCard extends StatefulWidget {
 }
 
 class _ServerStatsCardState extends State<_ServerStatsCard> {
-  List<DeliveryHistoryRecord> _todayRecords = const [];
-  List<DeliveryHistoryRecord> _monthRecords = const [];
-  bool _loading = true;
+  OutcomeCounts? _counts;
 
   @override
   void initState() {
     super.initState();
+    ShipmentOutcomeTracker.instance.revision.addListener(_loadStats);
     _loadStats();
   }
 
-  Future<void> _loadStats() async {
-    final history = await DeliveryHistoryStore.instance.allRecords();
-    final now = DateTime.now();
-    final month = history
-        .where((r) =>
-            r.timestamp.year == now.year && r.timestamp.month == now.month)
-        .toList();
-    final today = month.where((r) => r.timestamp.day == now.day).toList();
+  @override
+  void dispose() {
+    ShipmentOutcomeTracker.instance.revision.removeListener(_loadStats);
+    super.dispose();
+  }
 
-    if (mounted) {
-      setState(() {
-        _todayRecords = today;
-        _monthRecords = month;
-        _loading = false;
-      });
-    }
+  Future<void> _loadStats() async {
+    final counts =
+        await ShipmentOutcomeTracker.instance.countsFor(widget.tasks);
+    if (mounted) setState(() => _counts = counts);
   }
 
   @override
   Widget build(BuildContext context) {
-    final serverCompleted = widget.tasks
-        .where((t) => t.progress == TaskProgress.completed)
-        .length;
-    // A shipment delivered from this device is in the local history AND, once
-    // the server confirms it, in the current task list. Count it only once.
-    final currentAwbs = {
-      for (final task in widget.tasks) ...[
-        task.realAwb.trim(),
-        task.displayReference,
-      ],
-    };
-    int localOnly(List<DeliveryHistoryRecord> records) =>
-        records.where((r) => !currentAwbs.contains(r.awb)).length;
-    final todayDelivered = serverCompleted + localOnly(_todayRecords);
-    final totalDelivered = serverCompleted + localOnly(_monthRecords);
-    final totalAssigned = widget.tasks.length;
-
+    final counts = _counts;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Card(
@@ -394,9 +372,9 @@ class _ServerStatsCardState extends State<_ServerStatsCard> {
             'إحصائيات الشحنات والتوصيل',
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
-          subtitle: Text('توصيل اليوم: $todayDelivered شحنة'),
+          subtitle: Text('توصيل اليوم: ${counts?.deliveredToday ?? '…'} شحنة'),
           children: [
-            if (_loading)
+            if (counts == null)
               const Padding(
                 padding: EdgeInsets.all(16),
                 child: Center(child: CircularProgressIndicator()),
@@ -407,24 +385,44 @@ class _ServerStatsCardState extends State<_ServerStatsCard> {
                 child: Column(
                   children: [
                     _StatRow(
-                      title: 'توصيل اليوم (السيرفر + المحلي)',
-                      value: '$todayDelivered',
+                      title: 'تم التوصيل اليوم',
+                      value: '${counts.deliveredToday}',
                       icon: Icons.today_outlined,
                       color: Colors.green,
                     ),
                     const Divider(),
                     _StatRow(
-                      title: 'توصيل الشهر الحالي',
-                      value: '$totalDelivered',
+                      title: 'مغلقة اليوم (ملغاة/مرتجعة/لم تُسلَّم)',
+                      value: '${counts.closedToday}',
+                      icon: Icons.block_outlined,
+                      color: Colors.red,
+                    ),
+                    const Divider(),
+                    _StatRow(
+                      title: 'تم التوصيل من بداية الشهر',
+                      value: '${counts.deliveredMonth}',
                       icon: Icons.calendar_month_outlined,
                       color: Colors.blue,
                     ),
                     const Divider(),
                     _StatRow(
-                      title: 'إجمالي الشحنات المسندة بالسيرفر',
-                      value: '$totalAssigned',
+                      title: 'مغلقة من بداية الشهر',
+                      value: '${counts.closedMonth}',
+                      icon: Icons.event_busy_outlined,
+                      color: Colors.deepOrange,
+                    ),
+                    const Divider(),
+                    _StatRow(
+                      title: 'شحنات معك الآن',
+                      value: '${widget.tasks.length}',
                       icon: Icons.local_shipping_outlined,
                       color: Colors.orange,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'تُحسب من السيرفر لكل شحنة ظهرت في مهامك، حتى لو وُصّلت '
+                      'من التطبيق الرسمي. تبدأ من تاريخ تثبيت هذه النسخة.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
                     ),
                   ],
                 ),
