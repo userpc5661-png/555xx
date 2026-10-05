@@ -1140,6 +1140,15 @@ class _MapPageState extends State<_MapPage> {
   Position? _currentPosition;
   double _displayHeading = 0;
   bool _hasHeading = false;
+  // Compass updates arrive many times per second; only the arrow listens to
+  // them, so the whole map page is not rebuilt for each one.
+  final ValueNotifier<double> _headingNotifier = ValueNotifier<double>(0);
+
+  // Customer pins are rebuilt only when their inputs change, not on every
+  // GPS update.
+  List<ml.Marker>? _markerCache;
+  List<Object?>? _markerCacheKey;
+  int _correctionsVersion = 0;
   DateTime? _lastCompassCameraUpdate;
   bool _mapReady = false;
   bool _locating = true;
@@ -1179,6 +1188,7 @@ class _MapPageState extends State<_MapPage> {
     };
     if (!mounted || generation != _correctionsGeneration) return;
     setState(() {
+      _correctionsVersion++;
       _corrections
         ..clear()
         ..addAll(loaded);
@@ -1191,6 +1201,7 @@ class _MapPageState extends State<_MapPage> {
     _correctionsGeneration++;
     final location = change.location;
     setState(() {
+      _correctionsVersion++;
       if (location == null) {
         _corrections.remove(change.shipmentKey);
       } else {
@@ -1316,6 +1327,7 @@ class _MapPageState extends State<_MapPage> {
   void dispose() {
     LocationCorrectionService.changes.removeListener(_onCorrectionChanged);
     MapFocusService.requests.removeListener(_onMapFocusRequest);
+    _headingNotifier.dispose();
     _positionSubscription?.cancel();
     _compassSubscription?.cancel();
     super.dispose();
@@ -1501,7 +1513,11 @@ class _MapPageState extends State<_MapPage> {
                       smoothing) %
               360;
     if (_hasHeading && (next - _displayHeading).abs() < 0.35) return;
-    if (mounted) {
+    if (!mounted) return;
+    _headingNotifier.value = next;
+    if (_hasHeading) {
+      _displayHeading = next;
+    } else {
       setState(() {
         _displayHeading = next;
         _hasHeading = true;
@@ -2030,6 +2046,28 @@ class _MapPageState extends State<_MapPage> {
     }).toList();
   }
 
+  List<ml.Marker> _cachedCustomerMarkers(List<TaskItem> located) {
+    final key = <Object?>[
+      widget.tasks,
+      _contactData,
+      _localStatuses,
+      _paymentFilter,
+      _progressFilter,
+      _correctionsVersion,
+    ];
+    final previous = _markerCacheKey;
+    final same = previous != null &&
+        previous.length == key.length &&
+        Iterable<int>.generate(key.length).every(
+          (i) => identical(previous[i], key[i]) || previous[i] == key[i],
+        );
+    if (!same || _markerCache == null) {
+      _markerCache = _customerMarkers(located);
+      _markerCacheKey = key;
+    }
+    return _markerCache!;
+  }
+
   ml.Marker? _userMarker() {
     final position = _currentPosition;
     if (position == null) return null;
@@ -2037,8 +2075,12 @@ class _MapPageState extends State<_MapPage> {
       point: ml.Geographic(lon: position.longitude, lat: position.latitude),
       size: const Size(42, 42),
       rotate: true,
-      child: Transform.rotate(
-        angle: _displayHeading * math.pi / 180,
+      child: ValueListenableBuilder<double>(
+        valueListenable: _headingNotifier,
+        builder: (context, heading, child) => Transform.rotate(
+          angle: heading * math.pi / 180,
+          child: child,
+        ),
         child: Container(
           decoration: const BoxDecoration(
             shape: BoxShape.circle,
@@ -2110,7 +2152,7 @@ class _MapPageState extends State<_MapPage> {
     final initialCenter = _initialCenter(located);
     final scheme = Theme.of(context).colorScheme;
     final markers = <ml.Marker>[
-      ..._customerMarkers(located),
+      ..._cachedCustomerMarkers(located),
       if (_userMarker() case final marker?) marker,
     ];
 

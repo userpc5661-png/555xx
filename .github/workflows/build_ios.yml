@@ -57,14 +57,20 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build release APK
-        run: flutter build apk --release
+      # One APK per CPU type instead of one APK carrying all of them: each
+      # is much smaller. Debug symbols are kept out of the app.
+      - name: Build release APKs (per CPU, smaller)
+        run: |
+          flutter build apk --release --split-per-abi \
+            --split-debug-info=build/app/outputs/symbols
 
-      - name: Upload APK artifact
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
           name: SLSDriverNext_Android_APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: |
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -92,7 +98,8 @@ jobs:
 
       - name: Build iOS Application (No CodeSign)
         run: |
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign \
+            --split-debug-info=build/ios-symbols
 
       - name: Package .ipa File
         run: |
