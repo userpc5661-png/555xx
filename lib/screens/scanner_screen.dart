@@ -49,6 +49,8 @@ class _ScannerScreenState extends State<ScannerScreen>
   // Address is read (or the driver confirms without it after 3 tries).
   static const _labelAttemptsBeforeOverride = 3;
   final Map<String, int> _labelAttempts = {};
+  // Addresses read once (not yet confirmed by a second, matching read).
+  final Map<String, List<String>> _labelReads = {};
   final Map<String, ScannedShipment> _shipmentCache = {};
   final Map<String, String> _labelByOrderKey = {};
   late final ScanRepository _repository;
@@ -648,25 +650,44 @@ class _ScannerScreenState extends State<ScannerScreen>
 
       final frame = _lastFrame;
       if (mounted) setState(() => _lastLabelNote = 'جارٍ قراءة العنوان الوطني…');
-      labelAddress = frame == null
+      final read = frame == null
           ? null
           : await readCustomerShortFromFrame(jpeg: frame, order: shipment.raw);
+      // OCR can misread one letter or digit. A read is used when both
+      // prints on the label agree (or it is the server's own address), or
+      // when a second read of the label gives the same address.
+      final earlier = _labelReads[awb] ??= [];
+      if (read != null) {
+        if (read.confirmed || earlier.contains(read.value)) {
+          labelAddress = read.value;
+        } else {
+          earlier.add(read.value);
+        }
+      }
       if (labelAddress == null) {
         final attempts = (_labelAttempts[awb] ?? 0) + 1;
         _labelAttempts[awb] = attempts;
         if (attempts < _labelAttemptsBeforeOverride) {
           await _retryLabel(
-            'لم يُقرأ العنوان الوطني لـ $awb (محاولة $attempts من '
-            '$_labelAttemptsBeforeOverride). خلّ البوليصة كاملة وواضحة داخل الإطار.',
+            read == null
+                ? 'لم يُقرأ العنوان الوطني لـ $awb (محاولة $attempts من '
+                    '$_labelAttemptsBeforeOverride). خلّ البوليصة كاملة وواضحة داخل الإطار.'
+                : 'قرأت ${read.value} لـ $awb. امسح البوليصة مرة ثانية للتأكد '
+                    'من القراءة (محاولة $attempts من $_labelAttemptsBeforeOverride).',
           );
           return;
         }
-        final confirmWithout = await _askConfirmWithoutAddress(awb);
-        if (!confirmWithout) {
+        final choice = await _askConfirmWithoutAddress(
+          awb,
+          earlier.toSet().toList(),
+        );
+        if (choice == null) {
           _labelAttempts[awb] = 0;
+          _labelReads.remove(awb);
           await _retryLabel('صوّر البوليصة مرة أخرى داخل الإطار.');
           return;
         }
+        if (choice.isNotEmpty) labelAddress = choice;
       }
 
       await _repository.confirmOrder(
@@ -688,6 +709,7 @@ class _ScannerScreenState extends State<ScannerScreen>
     }
     final confirmed = shipment;
     _labelAttempts.remove(awb);
+    _labelReads.remove(awb);
     _shipmentCache.remove(awb);
     final orderKeys = {
       _key(awb),
@@ -746,30 +768,61 @@ class _ScannerScreenState extends State<ScannerScreen>
     if (mounted) await _controller.start();
   }
 
-  Future<bool> _askConfirmWithoutAddress(String awb) async {
-    if (!mounted) return false;
-    final result = await showDialog<bool>(
+  /// After the last attempt: the driver picks the address printed on the
+  /// label among the reads (checking it on the label), confirms without an
+  /// address (""), or tries again (null).
+  Future<String?> _askConfirmWithoutAddress(
+    String awb,
+    List<String> reads,
+  ) async {
+    if (!mounted) return null;
+    return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('لم يُقرأ العنوان الوطني'),
-        content: Text(
-          'حاولت $_labelAttemptsBeforeOverride مرات ولم أقرأ العنوان الوطني '
-          'للشحنة $awb.\nإذا كانت البوليصة تالفة أو بلا عنوان يمكنك التأكيد '
-          'بدونه، وتصحيح الموقع لاحقًا من "تصوير البوليصة".',
+        title: Text(
+          reads.isEmpty ? 'لم يُقرأ العنوان الوطني' : 'تأكد من العنوان الوطني',
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              reads.isEmpty
+                  ? 'حاولت $_labelAttemptsBeforeOverride مرات ولم أقرأ العنوان '
+                      'الوطني للشحنة $awb.\nإذا كانت البوليصة تالفة أو بلا عنوان '
+                      'يمكنك التأكيد بدونه، وتصحيح الموقع لاحقًا من "تصوير البوليصة".'
+                  : 'القراءات لم تتطابق للشحنة $awb. اختر العنوان المطبوع في '
+                      'البوليصة بعد "To National Address" إذا كان من هذه، '
+                      'أو أعد المحاولة:',
+            ),
+            for (final value in reads) ...[
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: () => Navigator.pop(context, value),
+                child: Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(context),
             child: const Text('إعادة المحاولة'),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
+          TextButton(
+            onPressed: () => Navigator.pop(context, ''),
             child: const Text('تأكيد بدون عنوان'),
           ),
         ],
       ),
     );
-    return result ?? false;
   }
 
   /// Stores the label address and its location in the background.

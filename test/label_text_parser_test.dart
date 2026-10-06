@@ -117,4 +117,71 @@ Desc. 1* 1:LPS-125-SF-00069/
       );
     });
   });
+
+  group('one wrong character', () {
+    String labelWith(String to1, String to2, {String from = 'RNMA7272'}) => '''
+From National Address $from
+To National Address $to1
+$from
+$to2
+''';
+
+    test('both prints agree: confirmed', () {
+      final read = LabelTextParser.customerRead(
+        LabelTextParser.parse(labelWith('EHAC4301', 'EHAC4301')),
+        senderShort: 'RNMA7272',
+      )!;
+      expect(read.value, 'EHAC4301');
+      expect(read.confirmed, isTrue);
+    });
+
+    test('only one print read: not confirmed until a second read agrees', () {
+      final read = LabelTextParser.customerRead(
+        LabelTextParser.parse(labelWith('EHAC4381', 'EH#C43')),
+        senderShort: 'RNMA7272',
+      )!;
+      expect(read.value, 'EHAC4381');
+      expect(read.confirmed, isFalse);
+    });
+
+    test('a misread of the server address is that address', () {
+      final read = LabelTextParser.customerRead(
+        LabelTextParser.parse(labelWith('EHAC4381', 'EH#C43')),
+        senderShort: 'RNMA7272',
+        serverCustomerShort: 'EHAC4301',
+      )!;
+      expect(read.value, 'EHAC4301');
+      expect(read.confirmed, isTrue);
+    });
+
+    test('both prints differ from the server by one: the label wins', () {
+      final read = LabelTextParser.customerRead(
+        LabelTextParser.parse(labelWith('EHAC4302', 'EHAC4302')),
+        senderShort: 'RNMA7272',
+        serverCustomerShort: 'EHAC4301',
+      )!;
+      expect(read.value, 'EHAC4302');
+      expect(read.confirmed, isTrue);
+    });
+
+    test('a misread sender is not taken as the customer', () {
+      final read = LabelTextParser.customerRead(
+        LabelTextParser.parse(
+          labelWith('EHAC4301', 'EHAC4301', from: 'RNMA7212'),
+        ),
+        senderShort: 'RNMA7272',
+      )!;
+      expect(read.value, 'EHAC4301');
+    });
+
+    test('a wrong default server address is not used', () {
+      final read = LabelTextParser.customerRead(
+        LabelTextParser.parse(labelWith('EHDG2289', 'EHDG2289')),
+        senderShort: 'RNMA7272',
+        serverCustomerShort: 'EHDA6787',
+      )!;
+      expect(read.value, 'EHDG2289');
+      expect(read.confirmed, isTrue);
+    });
+  });
 }

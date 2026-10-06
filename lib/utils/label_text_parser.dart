@@ -9,11 +9,31 @@ class LabelScan {
 
   final String rawText;
 
+  /// How many times each short address was read. The customer's address
+  /// is printed twice on the label, so a correct read is usually seen twice.
+  final Map<String, int> counts;
+
   const LabelScan({
     required this.shortAddresses,
     required this.awbCandidates,
     required this.rawText,
+    this.counts = const {},
   });
+}
+
+/// The customer's short address read from one label photo.
+class LabelRead {
+  final String value;
+
+  /// Times it was read in this photo (after merging one-character misreads
+  /// of the server's address).
+  final int seen;
+
+  /// Trustworthy on its own: both prints agree, or it is the server's own
+  /// address for this customer. Otherwise a second read must agree.
+  final bool confirmed;
+
+  const LabelRead(this.value, {required this.seen, required this.confirmed});
 }
 
 /// Parses text recognized from a label photo. Pure Dart, so it is tested
@@ -66,7 +86,22 @@ class LabelTextParser {
         if (!awbs.contains(m.group(0))) awbs.add(m.group(0)!);
       }
     }
-    return LabelScan(shortAddresses: shorts, awbCandidates: awbs, rawText: text);
+    return LabelScan(
+      shortAddresses: shorts,
+      awbCandidates: awbs,
+      rawText: text,
+      counts: Map.unmodifiable(counts),
+    );
+  }
+
+  /// Number of positions where two short addresses differ (same length).
+  static int distance(String a, String b) {
+    if (a.length != b.length) return 99;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) diff++;
+    }
+    return diff;
   }
 
   /// The customer's address among [scan]'s: drops the sender's
@@ -76,18 +111,57 @@ class LabelTextParser {
     LabelScan scan, {
     String? senderShort,
     String? serverCustomerShort,
+  }) =>
+      customerRead(
+        scan,
+        senderShort: senderShort,
+        serverCustomerShort: serverCustomerShort,
+      )?.value;
+
+  /// Like [customerShort], with how sure the read is. OCR sometimes reads
+  /// one wrong letter or digit (8/3, 1/7, C/G…):
+  /// - a read one character away from the sender's is the sender misread;
+  /// - a read seen once and one character away from the server's customer
+  ///   address is that address misread (when both prints say it, the
+  ///   label wins).
+  static LabelRead? customerRead(
+    LabelScan scan, {
+    String? senderShort,
+    String? serverCustomerShort,
   }) {
-    final candidates = scan.shortAddresses
-        .where((value) => value != senderShort)
-        .toList();
-    if (candidates.length == 1) return candidates.first;
-    if (candidates.isEmpty || serverCustomerShort == null) return null;
-    // The server's customer address may be a wrong default, but it is in
-    // the right region (first letter, e.g. E = Eastern); the sender is
-    // usually elsewhere (R = Riyadh).
-    final region = serverCustomerShort[0];
-    final sameRegion =
-        candidates.where((value) => value.startsWith(region)).toList();
-    return sameRegion.length == 1 ? sameRegion.first : null;
+    final counts = <String, int>{};
+    for (final value in scan.shortAddresses) {
+      final n = scan.counts[value] ?? 1;
+      if (senderShort != null && distance(value, senderShort) <= 1) continue;
+      var key = value;
+      if (serverCustomerShort != null &&
+          n == 1 &&
+          distance(value, serverCustomerShort) == 1) {
+        key = serverCustomerShort;
+      }
+      counts[key] = (counts[key] ?? 0) + n;
+    }
+    final candidates = counts.keys.toList()
+      ..sort((a, b) => counts[b]!.compareTo(counts[a]!));
+
+    String? chosen;
+    if (candidates.length == 1) {
+      chosen = candidates.first;
+    } else if (candidates.isNotEmpty && serverCustomerShort != null) {
+      // The server's customer address may be a wrong default, but it is in
+      // the right region (first letter, e.g. E = Eastern); the sender is
+      // usually elsewhere (R = Riyadh).
+      final region = serverCustomerShort[0];
+      final sameRegion =
+          candidates.where((value) => value.startsWith(region)).toList();
+      if (sameRegion.length == 1) chosen = sameRegion.first;
+    }
+    if (chosen == null) return null;
+    final seen = counts[chosen]!;
+    return LabelRead(
+      chosen,
+      seen: seen,
+      confirmed: seen >= 2 || chosen == serverCustomerShort,
+    );
   }
 }

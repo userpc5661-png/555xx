@@ -81,7 +81,7 @@ class LabelCaptureResult {
 
 /// Reads the customer's National Address from a camera frame of the label
 /// (on device). Null when it cannot be read clearly enough.
-Future<String?> readCustomerShortFromFrame({
+Future<LabelRead?> readCustomerShortFromFrame({
   required Uint8List jpeg,
   required Map<String, dynamic> order,
 }) async {
@@ -94,7 +94,7 @@ Future<String?> readCustomerShortFromFrame({
     final scan = await LabelOcrService.readLabel(file.path);
     final sender = await labelSenderShort(TaskItem.fromJson(order));
     final server = NationalAddressUtils.customerShortAddress(order);
-    return LabelTextParser.customerShort(
+    return LabelTextParser.customerRead(
       scan,
       senderShort: sender,
       serverCustomerShort: server,
