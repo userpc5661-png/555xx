@@ -8,6 +8,7 @@ import '../config/api_config.dart';
 import '../models/task_item.dart';
 import '../utils/tasks_response_summary.dart';
 import 'developer_diagnostics_service.dart';
+import 'session_credentials.dart';
 
 class ApiException implements Exception {
   final String message;
@@ -77,6 +78,9 @@ class ApiService {
     final user = body['user'];
     final ids = <String, dynamic>{};
     var driverName = '';
+    final profile = user is Map
+        ? SessionCredentials.withoutSecrets(Map<String, dynamic>.from(user))
+        : <String, dynamic>{};
     if (user is Map) {
       for (final entry in user.entries) {
         final key = entry.key.toString().toLowerCase();
@@ -121,6 +125,8 @@ class ApiService {
       'ids': ids,
       // The driver's name as SLS has it, for the home screen greeting.
       if (driverName.isNotEmpty) 'name': driverName,
+      // The account as SLS describes it, for the account info page.
+      'profile': profile,
     });
   }
 

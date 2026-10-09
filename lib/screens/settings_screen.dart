@@ -5,11 +5,13 @@ import '../services/delivery_history_store.dart';
 import '../services/driver_preferences_store.dart';
 import '../services/shipment_outcome_tracker.dart';
 import '../theme/theme_controller.dart';
+import 'account_info_screen.dart';
 import 'developer_diagnostics_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final List<TaskItem> tasks;
-  const SettingsScreen({super.key, this.tasks = const []});
+  final String token;
+  const SettingsScreen({super.key, this.tasks = const [], this.token = ''});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -80,6 +82,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         appBar: AppBar(title: const Text('الإعدادات')),
         body: ListView(
           children: [
+            ListTile(
+              leading: const Icon(Icons.badge_outlined),
+              title: const Text('معلومات الحساب'),
+              subtitle: const Text('اللي يرسله سيرفر SLS عن حسابك'),
+              trailing: const Icon(Icons.chevron_left),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => AccountInfoScreen(token: widget.token),
+                ),
+              ),
+            ),
+            const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.account_balance_wallet_outlined),
               title: const Text('التحصيل'),

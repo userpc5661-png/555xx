@@ -149,9 +149,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openSettings() {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => SettingsScreen(tasks: _tasks)));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SettingsScreen(tasks: _tasks, token: widget.token),
+      ),
+    );
   }
 
   Future<void> _logout() async {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/token_store.dart';
 import '../services/account_store.dart';
+import '../services/session_credentials.dart';
 import '../theme/theme_controller.dart';
 import 'home_screen.dart';
 
@@ -22,6 +23,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _hide = true;
   final _accounts = AccountStore();
   List<SavedAccount> _savedAccounts = const [];
+  Map<String, AccountLogin> _logins = const {};
   bool _remember = true;
 
   @override
@@ -32,12 +34,81 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _loadSavedAccounts() async {
     final accounts = await _accounts.readAccounts();
+    final logins = await _accounts.readLogins();
     if (!mounted) return;
-    setState(() => _savedAccounts = accounts);
+    setState(() {
+      _savedAccounts = accounts;
+      _logins = logins;
+    });
     if (accounts.isNotEmpty) {
       _email.text = accounts.first.email;
       _password.text = accounts.first.password;
     }
+  }
+
+  Future<void> _loadLogins() async {
+    final logins = await _accounts.readLogins();
+    if (mounted) setState(() => _logins = logins);
+  }
+
+  static String _when(DateTime at) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final now = DateTime.now();
+    final time = '${two(at.hour)}:${two(at.minute)}';
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(at.year, at.month, at.day);
+    if (day == today) return 'اليوم $time';
+    if (day == today.subtract(const Duration(days: 1))) return 'أمس $time';
+    return '${at.year}/${two(at.month)}/${two(at.day)} $time';
+  }
+
+  Widget _accountTile(SavedAccount account) {
+    final login = _logins[account.id];
+    final selected = _email.text.trim().toLowerCase() ==
+        account.email.trim().toLowerCase();
+    final name = login?.name ?? '';
+    final status = login == null
+        ? 'ما دخل من هالجوال بعد هالتحديث'
+        : login.ok
+            ? '✅ دخل ${_when(login.at)}'
+            : '❌ فشل الدخول ${_when(login.at)}';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+          color: selected
+              ? Theme.of(context).colorScheme.primary
+              : Colors.transparent,
+          width: 2,
+        ),
+      ),
+      child: ListTile(
+        onTap: () => _selectAccount(account),
+        leading: CircleAvatar(
+          backgroundColor: login == null
+              ? Colors.grey
+              : login.ok
+                  ? Colors.green
+                  : Colors.red,
+          child: const Icon(Icons.person, color: Colors.white),
+        ),
+        title: Text(
+          name.isEmpty ? account.email : name,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        subtitle: Text(
+          [
+            if (name.isNotEmpty) account.email,
+            status,
+            if (login != null && !login.ok && (login.error ?? '').isNotEmpty)
+              login.error!,
+          ].join('\n'),
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
   }
 
   void _selectAccount(SavedAccount account) {
@@ -62,6 +133,11 @@ class _LoginScreenState extends State<LoginScreen> {
         email: _email.text.trim(),
         password: _password.text,
       );
+      await _accounts.recordLogin(
+        _email.text.trim(),
+        ok: true,
+        name: SessionCredentials.fromSavedSession(token).driverName,
+      );
       if (_remember) {
         await _accounts.saveCredentials(_email.text.trim(), _password.text);
       } else {
@@ -73,6 +149,12 @@ class _LoginScreenState extends State<LoginScreen> {
         MaterialPageRoute(builder: (_) => HomeScreen(token: token)),
       );
     } catch (e) {
+      await _accounts.recordLogin(
+        _email.text.trim(),
+        ok: false,
+        error: e.toString(),
+      );
+      await _loadLogins();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -139,32 +221,14 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 48),
                       if (_savedAccounts.isNotEmpty) ...[
-                        DropdownButtonFormField<String>(
-                          value:
-                              _savedAccounts.any((a) => a.email == _email.text)
-                              ? _email.text
-                              : null,
-                          decoration: const InputDecoration(
-                            labelText: 'الحسابات المحفوظة',
-                            prefixIcon: Icon(Icons.manage_accounts_outlined),
-                          ),
-                          items: _savedAccounts
-                              .map(
-                                (a) => DropdownMenuItem(
-                                  value: a.email,
-                                  child: Text(a.email),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            if (value == null) return;
-                            _selectAccount(
-                              _savedAccounts.firstWhere(
-                                (a) => a.email == value,
-                              ),
-                            );
-                          },
+                        Text(
+                          'الحسابات المحفوظة',
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.bold),
                         ),
+                        const SizedBox(height: 8),
+                        for (final account in _savedAccounts)
+                          _accountTile(account),
                         const SizedBox(height: 16),
                       ],
                       TextFormField(
