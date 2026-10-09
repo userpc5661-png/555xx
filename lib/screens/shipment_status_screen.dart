@@ -10,6 +10,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'package:sls_assistant_pro/services/api_service.dart';
 import '../models/task_item.dart';
+import '../services/alert_sounds.dart';
 import '../services/developer_diagnostics_service.dart';
 import '../services/delivery_history_store.dart';
 import '../services/phone_action_service.dart';
@@ -855,6 +856,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
             _image == null ? 'Not required/selected' : 'Uploaded',
           );
           if (delivered) {
+            AlertSounds.delivered();
             await DeliveryHistoryStore.instance.recordCompleted(
               widget.task,
               awb: awb,

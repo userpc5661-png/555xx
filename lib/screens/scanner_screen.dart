@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,8 +9,10 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../models/scan_models.dart';
 import '../models/task_item.dart';
 import '../repositories/scan_repository.dart';
+import '../services/alert_sounds.dart';
 import '../services/developer_diagnostics_service.dart';
 import '../services/scan_api_service.dart';
+import '../utils/shipment_field_mapper.dart';
 import 'shipment_status_screen.dart';
 
 enum _ScanMode { automatic, verifyShipment }
@@ -34,6 +37,8 @@ class _ScannerScreenState extends State<ScannerScreen>
     autoStart: true,
     facing: CameraFacing.back,
     detectionSpeed: DetectionSpeed.normal,
+    // Frequent reads, so a code has to stay in the frame (see _stableFor).
+    detectionTimeoutMs: 100,
   );
   final Map<String, ScannedShipment> _shipmentCache = {};
   late final ScanRepository _repository;
@@ -41,7 +46,6 @@ class _ScannerScreenState extends State<ScannerScreen>
   late final _ScanMode _mode;
   bool _handled = false;
   bool _busy = false;
-  String? _lastCode;
   final List<LinehaulGroup> _linehaulGroups = [];
   ScannedOrderGroup? _orderGroup;
   final Set<String> _confirmedAwbs = {};
@@ -53,6 +57,23 @@ class _ScannerScreenState extends State<ScannerScreen>
   final List<_NotInGroupScan> _notInGroup = [];
   int _initialConfirmedCount = 0;
   int _locallyConfirmedCount = 0;
+  // Shipments confirmed in this group session, in scan order.
+  final List<_ScanEntry> _scanLog = [];
+
+  // A code is accepted only after it stays alone in the frame for
+  // [_stableFor]; a gap longer than [_maxGap] starts the wait again. This
+  // stops quick reads of a neighbouring label while the phone moves.
+  static const _stableFor = Duration(milliseconds: 500);
+  static const _maxGap = Duration(milliseconds: 700);
+  String? _candidate;
+  DateTime? _candidateSince;
+  DateTime? _candidateLastSeen;
+  Timer? _candidateTimer;
+  bool _multipleInFrame = false;
+  Timer? _multipleTimer;
+
+  // Collapsed height of the group list sheet, as a share of the screen.
+  static const double _sheetInitial = 0.3;
 
   static String _key(String value) =>
       value.trim().replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
@@ -84,6 +105,21 @@ class _ScannerScreenState extends State<ScannerScreen>
     });
   }
 
+  static Set<String> _orderKeys(GroupOrder order) => {
+        _key(order.referenceNumber),
+        _key(order.orderId),
+        if (order.id != null) '${order.id}',
+      }..remove('');
+
+  /// Position (1-based) of [order] in this session's scans, or null.
+  int? _scanNumberOf(GroupOrder order) {
+    final keys = _orderKeys(order);
+    for (var i = 0; i < _scanLog.length; i++) {
+      if (_scanLog[i].keys.any(keys.contains)) return i + 1;
+    }
+    return null;
+  }
+
   bool _isOrderScanned(GroupOrder order) {
     if (order.isConfirmed) return true;
     final keys = {
@@ -107,6 +143,8 @@ class _ScannerScreenState extends State<ScannerScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _candidateTimer?.cancel();
+    _multipleTimer?.cancel();
     unawaited(_controller.dispose());
     super.dispose();
   }
@@ -142,7 +180,6 @@ class _ScannerScreenState extends State<ScannerScreen>
     setState(() {
       _handled = false;
       _busy = false;
-      _lastCode = null;
     });
     await _startScanner();
   }
@@ -207,20 +244,26 @@ class _ScannerScreenState extends State<ScannerScreen>
 
   Future<void> _onDetect(BarcodeCapture capture) async {
     if (_handled || _busy) return;
-    final code = capture.barcodes
+    final codes = capture.barcodes
         .map((barcode) => barcode.rawValue)
         .whereType<String>()
         .map((value) => value.trim())
         .where((value) => value.isNotEmpty)
-        .firstOrNull;
-    if (code == null) return;
+        .toSet();
+    final code = _singleShipmentCode(codes);
+    if (code == null) {
+      if (codes.length > 1) _showMultipleInFrame();
+      return;
+    }
+    if (!_isStable(code)) return;
 
     _handled = true;
+    _candidateTimer?.cancel();
+    _candidate = null;
     await _controller.stop();
     if (!mounted) return;
     setState(() {
       _busy = true;
-      _lastCode = code;
     });
 
     try {
@@ -232,8 +275,63 @@ class _ScannerScreenState extends State<ScannerScreen>
         await _detectAndHandleCode(code);
       }
     } catch (error) {
+      AlertSounds.error();
       await _showError(error.toString());
       await _resumeScanner();
+    }
+  }
+
+  /// The one shipment code in the frame, or null when there is none or the
+  /// frame holds different shipments. One label can carry the same number
+  /// twice (e.g. a barcode and a QR link that contains it); then the
+  /// shortest code is used.
+  String? _singleShipmentCode(Set<String> codes) {
+    if (codes.isEmpty) return null;
+    if (codes.length == 1) return codes.first;
+    final sorted = codes.toList()
+      ..sort((a, b) => _key(a).length.compareTo(_key(b).length));
+    final shortest = _key(sorted.first);
+    if (shortest.isEmpty) return null;
+    final sameShipment = sorted.every((code) => _key(code).contains(shortest));
+    return sameShipment ? sorted.first : null;
+  }
+
+  /// Whether [code] has stayed in the frame for [_stableFor].
+  bool _isStable(String code) {
+    final now = DateTime.now();
+    final lastSeen = _candidateLastSeen;
+    final isNew = code != _candidate ||
+        lastSeen == null ||
+        now.difference(lastSeen) > _maxGap;
+    _candidateLastSeen = now;
+    _candidateTimer?.cancel();
+    _candidateTimer = Timer(_maxGap, () {
+      if (mounted) setState(() => _candidate = null);
+    });
+    if (isNew) {
+      _candidateSince = now;
+      if (_candidate != code || _multipleInFrame) {
+        setState(() {
+          _candidate = code;
+          _multipleInFrame = false;
+        });
+      }
+      return false;
+    }
+    return now.difference(_candidateSince!) >= _stableFor;
+  }
+
+  void _showMultipleInFrame() {
+    _candidateTimer?.cancel();
+    _multipleTimer?.cancel();
+    _multipleTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _multipleInFrame = false);
+    });
+    if (!_multipleInFrame || _candidate != null) {
+      setState(() {
+        _multipleInFrame = true;
+        _candidate = null;
+      });
     }
   }
 
@@ -278,6 +376,7 @@ class _ScannerScreenState extends State<ScannerScreen>
 
   Future<void> _showUnifiedError(List<ScanAttemptResult> attempts) async {
     if (!mounted) return;
+    AlertSounds.error();
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -399,6 +498,7 @@ class _ScannerScreenState extends State<ScannerScreen>
       'Verified ${shipment.referenceNumber.isEmpty ? code : shipment.referenceNumber}',
     );
     if (!mounted) return;
+    AlertSounds.success();
     if (task != null) {
       // Return the complete shipment fetched by the same API used by the
       // smart scanner. The task flow must continue with this fresh server
@@ -569,9 +669,9 @@ class _ScannerScreenState extends State<ScannerScreen>
   Future<void> _scanLinehaul(String code) async {
     final group = await _repository.scanLinehaulGroup(code);
     if (!mounted) return;
+    AlertSounds.success();
     setState(() {
       _busy = false;
-      _lastCode = null;
       if (!_linehaulGroups.any((item) => item.id == group.id)) {
         _linehaulGroups.add(group);
       }
@@ -581,6 +681,7 @@ class _ScannerScreenState extends State<ScannerScreen>
   Future<void> _scanOrderGroup(String code) async {
     final group = await _repository.scanOrderGroup(code);
     if (!mounted) return;
+    AlertSounds.success();
     setState(() {
       _orderGroup = group;
       _initialConfirmedCount =
@@ -588,6 +689,7 @@ class _ScannerScreenState extends State<ScannerScreen>
       _locallyConfirmedCount = 0;
       _confirmedOrderKeys.clear();
       _notInGroup.clear();
+      _scanLog.clear();
       _confirmedAwbs
         ..clear()
         ..addAll(
@@ -597,7 +699,6 @@ class _ScannerScreenState extends State<ScannerScreen>
               .where((value) => value.isNotEmpty),
         );
       _busy = false;
-      _lastCode = null;
       _handled = false;
     });
     await _controller.start();
@@ -607,7 +708,26 @@ class _ScannerScreenState extends State<ScannerScreen>
     final group = _orderGroup;
     if (group == null) return;
     if (_confirmedAwbs.contains(awb)) {
-      throw StateError('تم مسح هذه الشحنة وتأكيدها مسبقًا في هذه الجلسة.');
+      final entry = _scanLog
+          .where((item) => item.keys.contains(_key(awb)))
+          .firstOrNull;
+      if (!mounted) return;
+      unawaited(HapticFeedback.mediumImpact());
+      setState(() {
+        _busy = false;
+        _handled = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(milliseconds: 1500),
+          content: Text(
+            'ممسوحة من قبل: ${entry?.label ?? awb}',
+            textDirection: TextDirection.rtl,
+          ),
+        ),
+      );
+      await _controller.start();
+      return;
     }
 
     // Same requests as before; a failure is only recorded for the list
@@ -626,10 +746,19 @@ class _ScannerScreenState extends State<ScannerScreen>
         final message = error is ScanApiException
             ? error.message
             : error.toString();
+        final wrong = _NotInGroupScan(
+          code: awb,
+          number: shipment == null ? awb : _shipmentNumber(shipment, awb),
+          customer: shipment?.customerName.trim() ?? '',
+          message: message,
+        );
         setState(() {
           _notInGroup.removeWhere((item) => item.code == awb);
-          _notInGroup.add(_NotInGroupScan(awb, message));
+          _notInGroup.add(wrong);
         });
+        throw ScanApiException(
+          'الشحنة ${wrong.label} ليست من هذي المجموعة.\n$message',
+        );
       }
       rethrow;
     }
@@ -641,23 +770,41 @@ class _ScannerScreenState extends State<ScannerScreen>
       _key(confirmed.actualAwb),
       '${confirmed.id}',
     }..remove('');
+    final entry = _ScanEntry(
+      number: _shipmentNumber(confirmed, awb),
+      customer: confirmed.customerName.trim(),
+      keys: orderKeys,
+    );
     if (!mounted) return;
+    AlertSounds.success();
     setState(() {
       _confirmedAwbs.add(awb);
       _confirmedOrderKeys.addAll(orderKeys);
+      _scanLog.add(entry);
       _locallyConfirmedCount += 1;
       _busy = false;
-      _lastCode = null;
       _handled = false;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        duration: const Duration(milliseconds: 1200),
-        content: Text('تم تأكيد الشحنة $awb'),
+        duration: const Duration(milliseconds: 1500),
+        content: Text(
+          '✅ ${_scanLog.length}. ${entry.label}',
+          textDirection: TextDirection.rtl,
+        ),
       ),
     );
     await _controller.start();
   }
+
+  /// The shipment number to show the driver, instead of the raw code
+  /// (which can be a link or an internal code).
+  static String _shipmentNumber(ScannedShipment shipment, String code) =>
+      ShipmentFieldMapper.firstNonEmpty([
+        shipment.referenceNumber,
+        shipment.actualAwb,
+        code,
+      ]);
 
   Future<void> _executeLinehaulAction() async {
     final allClosed = _linehaulGroups.isNotEmpty &&
@@ -718,11 +865,12 @@ class _ScannerScreenState extends State<ScannerScreen>
                 'هل تريد تحويل جميع طلبات المجموعة ${group.id} إلى OFD؟',
               ),
               const SizedBox(height: 12),
-              Flexible(child: _GroupOrdersList(
-                orders: group.orders,
-                isScanned: _isOrderScanned,
-                notInGroup: _notInGroup,
-              )),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _groupRows(compact: true),
+                ),
+              ),
             ],
           ),
         ),
@@ -762,44 +910,6 @@ class _ScannerScreenState extends State<ScannerScreen>
     }
   }
 
-  Future<void> _showGroupOrders() async {
-    final group = _orderGroup;
-    if (group == null) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: FractionallySizedBox(
-          heightFactor: 0.75,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'شحنات المجموعة ${group.id}',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: _GroupOrdersList(
-                    orders: group.orders,
-                    isScanned: _isOrderScanned,
-                    notInGroup: _notInGroup,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Future<void> _showError(String message) async {
     if (!mounted) return;
     await showDialog<void>(
@@ -836,116 +946,288 @@ class _ScannerScreenState extends State<ScannerScreen>
     if (_linehaulGroups.isNotEmpty) {
       return _buildLinehaulSummary();
     }
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        MobileScanner(
-          controller: _controller,
-          onDetect: _onDetect,
-          onDetectError: (error, stackTrace) {
-            DeveloperDiagnosticsService.instance
-                .setContext('QR detection error', error.toString());
-          },
-          errorBuilder: _buildCameraError,
-        ),
-        Center(
-          child: Container(
-            width: 270,
-            height: 210,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.white, width: 3),
-              borderRadius: BorderRadius.circular(20),
+    final group = _orderGroup;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        // The frame sits in the part of the screen above the bottom panel,
+        // so the panel never covers it. Only codes inside it are read.
+        final panelHeight =
+            group != null ? size.height * _sheetInitial : 170.0;
+        const frameHeight = 190.0;
+        final frameWidth = math.min(size.width - 32, 380.0);
+        final centerY = math.max(
+          frameHeight / 2 + 56,
+          (size.height - panelHeight) / 2,
+        );
+        final frame = Rect.fromCenter(
+          center: Offset(size.width / 2, centerY),
+          width: frameWidth,
+          height: frameHeight,
+        );
+        final frameColor = _multipleInFrame
+            ? Colors.redAccent
+            : _candidate != null
+                ? Colors.amber
+                : Colors.white;
+        final hint = _multipleInFrame
+            ? 'وجّه على شحنة وحدة'
+            : _candidate != null
+                ? 'ثبّت الجوال…'
+                : 'خلّ الباركود داخل الإطار';
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            MobileScanner(
+              controller: _controller,
+              scanWindow: frame,
+              onDetect: _onDetect,
+              onDetectError: (error, stackTrace) {
+                DeveloperDiagnosticsService.instance
+                    .setContext('QR detection error', error.toString());
+              },
+              errorBuilder: _buildCameraError,
             ),
-          ),
-        ),
-        Positioned(
-          left: 16,
-          right: 16,
-          bottom: 24,
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: _busy
-                  ? Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        const SizedBox(width: 12),
-                        Flexible(
-                            child: Text('جارٍ معالجة ${_lastCode ?? 'الكود'}')),
-                      ],
-                    )
-                  : Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _mode == _ScanMode.verifyShipment
-                              ? 'امسح باركود الشحنة ${widget.verificationTask!.displayReference}'
-                              : _orderGroup == null
-                                  ? 'وجّه الكاميرا لأي كود: مسار أو مجموعة أو شحنة'
-                                  : 'المجموعة ${_orderGroup!.id} — امسح باركود الشحنة',
-                          textAlign: TextAlign.center,
-                        ),
-                        if (_orderGroup != null) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            'تم تأكيد $_confirmedCount من ${_orderGroup!.orders.length}',
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 8),
-                          LinearProgressIndicator(
-                            value: _orderGroup!.orders.isEmpty
-                                ? 0
-                                : _confirmedCount / _orderGroup!.orders.length,
-                          ),
-                          const SizedBox(height: 6),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 170),
-                            child: _GroupOrdersList(
-                              orders: _orderGroup!.orders,
-                              isScanned: _isOrderScanned,
-                              notInGroup: _notInGroup,
-                              compact: true,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          OutlinedButton.icon(
-                            onPressed: _showGroupOrders,
-                            icon: const Icon(Icons.list_alt_rounded),
-                            label: Text(
-                              'عرض القائمة كاملة ($_confirmedCount/${_orderGroup!.orders.length})',
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          FilledButton.icon(
-                            onPressed: _orderGroup!.orders.isNotEmpty &&
-                                    _confirmedCount >=
-                                        _orderGroup!.orders.length
-                                ? _moveToOfd
-                                : null,
-                            icon: const Icon(Icons.local_shipping),
-                            label: const Text('خارج للتوصيل (OFD)'),
-                          ),
-                          if (_confirmedCount < _orderGroup!.orders.length) ...[
-                            const SizedBox(height: 6),
-                            const Text(
-                              'أكمل مسح كل الشحنات حتى يتفعّل زر بدء التوصيل.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(fontSize: 12),
-                            ),
-                          ],
-                        ],
-                      ],
+            Positioned.fromRect(
+              rect: frame,
+              child: IgnorePointer(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: frameColor, width: 4),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              top: math.max(8, frame.top - 48),
+              child: IgnorePointer(
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 7,
                     ),
+                    decoration: BoxDecoration(
+                      color: _multipleInFrame
+                          ? Colors.red.shade700
+                          : Colors.black.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      _busy ? 'جارٍ المعالجة…' : hint,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
-        ),
-      ],
+            if (group != null)
+              _buildGroupSheet(group)
+            else
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 24,
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: _busy
+                        ? const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 22,
+                                height: 22,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                              SizedBox(width: 12),
+                              Flexible(child: Text('جارٍ المعالجة…')),
+                            ],
+                          )
+                        : Text(
+                            _mode == _ScanMode.verifyShipment
+                                ? 'امسح باركود الشحنة ${widget.verificationTask!.displayReference}'
+                                : 'وجّه الكاميرا لأي كود: مسار أو مجموعة أو شحنة',
+                            textAlign: TextAlign.center,
+                          ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
+  }
+
+  /// The group's shipments in a panel the driver drags up for the full
+  /// list; collapsed it shows only the counts and stays below the frame.
+  Widget _buildGroupSheet(ScannedOrderGroup group) {
+    final total = group.orders.length;
+    final remaining = total - _confirmedCount;
+    final last = _scanLog.isEmpty ? null : _scanLog.last;
+    return DraggableScrollableSheet(
+      initialChildSize: _sheetInitial,
+      minChildSize: 0.16,
+      maxChildSize: 0.9,
+      snap: true,
+      builder: (context, scrollController) => Material(
+        elevation: 12,
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+        child: ListView(
+          controller: scrollController,
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            Center(
+              child: Container(
+                width: 44,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade400,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'المجموعة ${group.id}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                if (_busy)
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                _CountChip('✅', _confirmedCount, Colors.green),
+                const SizedBox(width: 6),
+                _CountChip('⏳', remaining < 0 ? 0 : remaining, Colors.red),
+                const SizedBox(width: 6),
+                _CountChip('⚠️', _notInGroup.length, Colors.orange.shade800),
+              ],
+            ),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: total == 0 ? 0 : _confirmedCount / total,
+            ),
+            if (last != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                'آخر شحنة: ${last.label}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: total > 0 && _confirmedCount >= total && !_busy
+                  ? _moveToOfd
+                  : null,
+              icon: const Icon(Icons.local_shipping),
+              label: const Text('خارج للتوصيل (OFD)'),
+            ),
+            if (_confirmedCount < total) ...[
+              const SizedBox(height: 4),
+              const Text(
+                'أكمل مسح كل الشحنات حتى يتفعّل زر بدء التوصيل. اسحب لفوق لعرض القائمة.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
+            const Divider(height: 20),
+            ..._groupRows(compact: false),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Every shipment of the group: not in the group (orange), remaining
+  /// (red), and scanned (green, numbered in scan order, latest first).
+  List<Widget> _groupRows({required bool compact}) {
+    final group = _orderGroup;
+    if (group == null) return const [];
+    String number(GroupOrder order) => order.referenceNumber.isNotEmpty
+        ? order.referenceNumber
+        : order.orderId;
+    String customer(GroupOrder order) =>
+        ShipmentFieldMapper.recipientName(order.raw);
+
+    final remaining =
+        group.orders.where((order) => !_isOrderScanned(order)).toList();
+    final scanned = group.orders.where(_isOrderScanned).toList()
+      ..sort((a, b) {
+        // Latest scan on top; shipments confirmed before this session last.
+        final ia = _scanNumberOf(a) ?? 0;
+        final ib = _scanNumberOf(b) ?? 0;
+        return ib.compareTo(ia);
+      });
+
+    return [
+      if (_notInGroup.isNotEmpty)
+        _SectionHeader(
+          '⚠️ ليست من المجموعة (${_notInGroup.length})',
+          Colors.orange.shade800,
+        ),
+      for (final extra in _notInGroup.reversed)
+        _OrderRow(
+          number: extra.number,
+          customer: extra.customer,
+          color: Colors.orange.shade800,
+          icon: Icons.report_problem,
+          note: compact ? 'ليست في المجموعة' : extra.message,
+          compact: compact,
+        ),
+      if (remaining.isNotEmpty)
+        _SectionHeader('⏳ باقي ما انمسحت (${remaining.length})', Colors.red),
+      for (final order in remaining)
+        _OrderRow(
+          number: number(order),
+          customer: customer(order),
+          color: Colors.red,
+          icon: Icons.hourglass_empty,
+          note: 'لم تُمسح',
+          compact: compact,
+        ),
+      if (scanned.isNotEmpty)
+        _SectionHeader('✅ تم المسح (${scanned.length})', Colors.green),
+      for (final order in scanned)
+        () {
+          final index = _scanNumberOf(order);
+          final entry = index == null ? null : _scanLog[index - 1];
+          return _OrderRow(
+            number: number(order),
+            customer: entry?.customer.isNotEmpty == true
+                ? entry!.customer
+                : customer(order),
+            color: Colors.green,
+            icon: Icons.check_circle,
+            note: index == null ? 'مؤكدة من قبل' : 'تم المسح',
+            badge: index == null ? null : '$index',
+            compact: compact,
+          );
+        }(),
+    ];
   }
 
   Widget _buildLinehaulSummary() {
@@ -1004,97 +1286,65 @@ class _ScannerScreenState extends State<ScannerScreen>
   }
 }
 
-class _NotInGroupScan {
-  final String code;
-  final String message;
-  const _NotInGroupScan(this.code, this.message);
-}
+String _labelOf(String number, String customer) =>
+    customer.isEmpty ? number : '$number — $customer';
 
-/// Every shipment of the group, in three sections: remaining (red),
-/// scanned (green), and scanned but not in this group (orange).
-class _GroupOrdersList extends StatelessWidget {
-  final List<GroupOrder> orders;
-  final bool Function(GroupOrder) isScanned;
-  final List<_NotInGroupScan> notInGroup;
-  final bool compact;
-
-  const _GroupOrdersList({
-    required this.orders,
-    required this.isScanned,
-    this.notInGroup = const [],
-    this.compact = false,
+/// A shipment confirmed in this group session.
+class _ScanEntry {
+  final String number;
+  final String customer;
+  final Set<String> keys;
+  const _ScanEntry({
+    required this.number,
+    required this.customer,
+    required this.keys,
   });
 
-  static String _number(GroupOrder order) =>
-      order.referenceNumber.isNotEmpty ? order.referenceNumber : order.orderId;
+  String get label => _labelOf(number, customer);
+}
+
+/// A shipment scanned in this group session that is not in the group.
+class _NotInGroupScan {
+  final String code;
+  final String number;
+  final String customer;
+  final String message;
+  const _NotInGroupScan({
+    required this.code,
+    required this.number,
+    required this.customer,
+    required this.message,
+  });
+
+  String get label => _labelOf(number, customer);
+}
+
+class _CountChip extends StatelessWidget {
+  final String icon;
+  final int count;
+  final Color color;
+  const _CountChip(this.icon, this.count, this.color);
 
   @override
-  Widget build(BuildContext context) {
-    final remaining = orders.where((o) => !isScanned(o)).toList();
-    final scanned = orders.where(isScanned).toList();
-
-    final rows = <Widget>[
-      if (remaining.isNotEmpty)
-        _SectionHeader('باقي، لم تُمسح (${remaining.length})', Colors.red),
-      for (final order in remaining)
-        _OrderRow(
-          number: _number(order),
-          color: Colors.red,
-          icon: Icons.cancel,
-          note: 'لم تُمسح',
-          strike: true,
-          compact: compact,
-        ),
-      if (notInGroup.isNotEmpty)
-        _SectionHeader(
-          'ممسوحة وليست في المجموعة (${notInGroup.length})',
-          Colors.orange,
-        ),
-      for (final extra in notInGroup)
-        _OrderRow(
-          number: extra.code,
-          color: Colors.orange.shade800,
-          icon: Icons.report_problem,
-          note: compact ? 'ليست في المجموعة' : extra.message,
-          strike: false,
-          compact: compact,
-        ),
-      if (scanned.isNotEmpty)
-        _SectionHeader('تم المسح (${scanned.length})', Colors.green),
-      for (final order in scanned)
-        _OrderRow(
-          number: _number(order),
-          color: Colors.green,
-          icon: Icons.check_circle,
-          note: 'تم المسح',
-          strike: false,
-          compact: compact,
-        ),
-    ];
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'الإجمالي ${orders.length}  •  تم المسح ${scanned.length}  •  '
-          'باقي ${remaining.length}'
-          '${notInGroup.isEmpty ? '' : '  •  خارج المجموعة ${notInGroup.length}'}',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: compact ? 12 : 14,
-            color: remaining.isEmpty && notInGroup.isEmpty
-                ? Colors.green
-                : Colors.red,
+  Widget build(BuildContext context) => Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            border: Border.all(color: color.withValues(alpha: 0.6)),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '$icon $count',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+            ),
           ),
         ),
-        const SizedBox(height: 6),
-        Flexible(
-          child: ListView(shrinkWrap: true, children: rows),
-        ),
-      ],
-    );
-  }
+      );
 }
 
 class _SectionHeader extends StatelessWidget {
@@ -1114,19 +1364,21 @@ class _SectionHeader extends StatelessWidget {
 
 class _OrderRow extends StatelessWidget {
   final String number;
+  final String customer;
   final Color color;
   final IconData icon;
   final String note;
-  final bool strike;
+  final String? badge;
   final bool compact;
 
   const _OrderRow({
     required this.number,
+    required this.customer,
     required this.color,
     required this.icon,
     required this.note,
-    required this.strike,
     required this.compact,
+    this.badge,
   });
 
   @override
@@ -1143,17 +1395,46 @@ class _OrderRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(icon, color: color, size: compact ? 16 : 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                number,
-                textDirection: TextDirection.ltr,
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: color,
-                  decoration: strike ? TextDecoration.lineThrough : null,
+            if (badge != null)
+              Container(
+                width: 28,
+                height: 28,
+                alignment: Alignment.center,
+                margin: const EdgeInsetsDirectional.only(end: 8),
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                child: Text(
+                  badge!,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                  ),
                 ),
+              )
+            else ...[
+              Icon(icon, color: color, size: compact ? 16 : 20),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    number,
+                    textDirection: TextDirection.ltr,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: color,
+                    ),
+                  ),
+                  if (customer.isNotEmpty)
+                    Text(
+                      customer,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 6),
