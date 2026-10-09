@@ -11,7 +11,6 @@ import '../models/task_item.dart';
 import '../repositories/scan_repository.dart';
 import '../services/alert_sounds.dart';
 import '../services/developer_diagnostics_service.dart';
-import '../services/offline_mode.dart';
 import '../services/scan_api_service.dart';
 import '../utils/shipment_field_mapper.dart';
 import 'shipment_status_screen.dart';
@@ -277,16 +276,10 @@ class _ScannerScreenState extends State<ScannerScreen>
       }
     } catch (error) {
       AlertSounds.error();
-      await _showError(
-        OfflineMode.isNetworkError(error) ? _networkMessage : error.toString(),
-      );
+      await _showError(error.toString());
       await _resumeScanner();
     }
   }
-
-  String get _networkMessage => OfflineMode.isOn
-      ? OfflineMode.needsInternetMessage
-      : 'النت ضعيف أو مقطوع. حاول مرة ثانية لما يصير النت أحسن.';
 
   /// The one shipment code in the frame, or null when there is none or the
   /// frame holds different shipments. One label can carry the same number
@@ -377,13 +370,6 @@ class _ScannerScreenState extends State<ScannerScreen>
     if (await attempt('GROUP', () => _scanOrderGroup(code))) return;
     if (await attempt('SHIPMENT', () => _verifyShipment(code))) return;
 
-    if (attempts.isNotEmpty &&
-        attempts.every((a) => a.statusCode == 0 && a.responseBody.isEmpty)) {
-      AlertSounds.error();
-      await _showError(_networkMessage);
-      await _resumeScanner();
-      return;
-    }
     await _showUnifiedError(attempts);
     await _resumeScanner();
   }
@@ -503,14 +489,6 @@ class _ScannerScreenState extends State<ScannerScreen>
         throw const ScanApiException(
           'الباركود الممسوح لا يطابق الشحنة المحددة.',
         );
-      }
-      // Offline mode: the label matches; continue with the shipment as
-      // saved in the task list.
-      if (OfflineMode.isOn) {
-        AlertSounds.success();
-        Navigator.of(context)
-            .pop(ScannedShipment.fromJson(task.raw, task.realAwb));
-        return;
       }
     }
 
@@ -670,7 +648,7 @@ class _ScannerScreenState extends State<ScannerScreen>
         ),
       );
 
-      if (updated == true && mounted && !OfflineMode.isOn) {
+      if (updated == true && mounted) {
         try {
           setState(() => _busy = true);
           final updatedShipment =

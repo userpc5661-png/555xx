@@ -4,8 +4,6 @@ import '../models/scan_models.dart';
 import '../models/task_item.dart';
 import '../services/map_focus_service.dart';
 import '../services/navigation_service.dart';
-import '../services/offline_mode.dart';
-import '../services/offline_queue.dart';
 import '../screens/shipment_status_screen.dart';
 import '../screens/scanner_screen.dart';
 import '../services/phone_action_service.dart';
@@ -365,22 +363,6 @@ class TaskCard extends StatelessWidget {
     final awb = task.realAwb;
     debugPrint('NOT DELIVERED AWB: $awb');
 
-    // Offline mode: the shipment as saved in the task list.
-    if (OfflineMode.isOn) {
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ShipmentStatusScreen(
-            task: task,
-            savedSession: session,
-            awbOverride: awb,
-            onUpdated: onUpdated,
-            mode: ShipmentStatusMode.all,
-          ),
-        ),
-      );
-      return;
-    }
-
     try {
       final shipment = await api.scanOrder(awb);
       debugPrint('SCAN RAW KEYS: ${shipment.raw.keys}');
@@ -403,13 +385,7 @@ class TaskCard extends StatelessWidget {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            OfflineMode.isNetworkError(e)
-                ? 'النت ضعيف أو مقطوع. تقدر تحوّل لوضع أوفلاين وتحفظ الحالة على الجوال.'
-                : 'تعذر جلب خيارات تحديث الحالة: $e',
-          ),
-        ),
+        SnackBar(content: Text('تعذر جلب خيارات تحديث الحالة: $e')),
       );
     }
   }
@@ -662,7 +638,6 @@ class TaskCard extends StatelessWidget {
                         style: TextStyle(color: Colors.grey[600], fontSize: 13),
                       ),
                       _SharedAddressChip(task: task),
-                      _OfflinePendingChip(task: task),
                       if (task.isReverse)
                         Container(
                           margin: const EdgeInsets.only(top: 4),
@@ -1022,46 +997,6 @@ class _SharedAddressChip extends StatelessWidget {
                 ),
               );
             },
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// "Waiting to be sent" for a status saved in offline mode, or the
-/// server's reason in red when SLS refused it.
-class _OfflinePendingChip extends StatelessWidget {
-  final TaskItem task;
-  const _OfflinePendingChip({required this.task});
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<List<OfflineStatusUpdate>>(
-      valueListenable: OfflineQueue.instance.items,
-      builder: (context, _, __) {
-        final queue = OfflineQueue.instance;
-        final item = queue.pendingFor(task.realAwb) ??
-            queue.pendingFor(task.displayReference);
-        if (item == null) return const SizedBox.shrink();
-        final failed = item.state == OfflineItemState.failed;
-        final color = failed ? Colors.red : Colors.orange.shade800;
-        return Container(
-          margin: const EdgeInsets.only(top: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(
-            failed
-                ? '❌ رفضها السيرفر (${item.displayLabel}): ${item.error ?? ''}'
-                : '⏳ تنتظر الإرسال: ${item.displayLabel}',
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
           ),
         );
       },
