@@ -84,6 +84,8 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   String? _softPosTransactionId;
   bool _softPosRegisteredOnSls = false;
   late final SoftPosService _softPosService;
+  // Where the driver is now, read while the form is filled in.
+  late final Future<Position?> _positionFix;
   bool _loading = true;
   bool _submitting = false;
   String? _error;
@@ -109,6 +111,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
     _api = ScanApiService(savedSession: widget.savedSession);
     _mainApi = ApiService();
     _softPosService = SoftPosService();
+    _positionFix = _currentPosition();
     _diagnostics
       ..setContext('Current shipment ID', widget.task.officialOrderId)
       ..setContext('Current AWB', widget.task.displayReference);
@@ -256,6 +259,19 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
 
   String _fingerprint(Map<String, dynamic> option) =>
       '${_statusId(option)}|${_statusLabelId(option)}|${_optionLabel(option).toLowerCase()}';
+
+  Future<Position?> _currentPosition() async {
+    try {
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<void> _loadStatuses() async {
     setState(() {
@@ -677,20 +693,17 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       double? latitude;
       double? longitude;
       try {
-        final lastKnown = await Geolocator.getLastKnownPosition();
-        if (lastKnown != null) {
-          latitude = lastKnown.latitude;
-          longitude = lastKnown.longitude;
-        } else {
-          final position = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.medium,
-              timeLimit: Duration(seconds: 3),
-            ),
-          );
-          latitude = position.latitude;
-          longitude = position.longitude;
-        }
+        // The phone's last saved position can be minutes old (another
+        // street), so the fresh fix asked for when the screen opened is
+        // used; the saved one only if that is not ready within 2s.
+        Position? position;
+        try {
+          position = await _positionFix.timeout(const Duration(seconds: 2));
+        } catch (_) {}
+        position ??= await Geolocator.getLastKnownPosition();
+        if (position == null) throw StateError('No position');
+        latitude = position.latitude;
+        longitude = position.longitude;
         _diagnostics.setContext(
           'GPS coordinates',
           '$latitude, $longitude',
@@ -961,7 +974,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
   }
 
   /// True only when the server's own data shows the new status. Uses the
-  /// shipment lookup (orders/awb); if that cannot tell, the task list.
+  /// shipment lookup (orders/awb); if that request fails, the task list.
   /// Both are read-only GET requests. Retries once, as the server may need
   /// a moment to apply the update.
   Future<bool> _verifyOnServer({
@@ -976,15 +989,14 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
     Future<bool> check() async {
       try {
         final shipment = await _api.scanOrder(awb);
-        if (StatusVerification.matches(
+        // The lookup answered: the full task list would show the same.
+        return StatusVerification.matches(
           shipment.raw,
           sentStatusId: statusId,
           delivered: delivered,
           sentStatusLabel: statusLabel,
           sentAt: sentAt,
-        )) {
-          return true;
-        }
+        );
       } catch (error) {
         debugPrint('Verify via orders/awb failed: $error');
       }

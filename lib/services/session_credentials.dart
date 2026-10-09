@@ -5,10 +5,15 @@ class SessionCredentials {
   final String cookie;
   final Map<String, dynamic> ids;
 
+  /// The driver's name from the login reply; empty for sessions saved
+  /// before it was kept.
+  final String driverName;
+
   const SessionCredentials({
     required this.apiToken,
     required this.cookie,
     this.ids = const {},
+    this.driverName = '',
   });
 
   factory SessionCredentials.fromSavedSession(String savedSession) {
@@ -23,6 +28,7 @@ class SessionCredentials {
             ids: decoded['ids'] is Map
                 ? Map<String, dynamic>.from(decoded['ids'] as Map)
                 : const {},
+            driverName: (decoded['name'] ?? '').toString().trim(),
           );
         }
       } catch (_) {

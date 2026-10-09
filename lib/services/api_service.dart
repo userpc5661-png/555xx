@@ -76,6 +76,7 @@ class ApiService {
 
     final user = body['user'];
     final ids = <String, dynamic>{};
+    var driverName = '';
     if (user is Map) {
       for (final entry in user.entries) {
         final key = entry.key.toString().toLowerCase();
@@ -83,6 +84,18 @@ class ApiService {
           ids[entry.key.toString()] = entry.value;
         }
       }
+      String text(Object? value) {
+        final result = value?.toString().trim() ?? '';
+        return result.toLowerCase() == 'null' ? '' : result;
+      }
+
+      final fullName =
+          '${text(user['first_name'])} ${text(user['last_name'])}'.trim();
+      driverName = [
+        text(user['name']),
+        text(user['full_name']),
+        fullName,
+      ].firstWhere((value) => value.isNotEmpty, orElse: () => '');
     }
 
     debugPrint(
@@ -106,6 +119,8 @@ class ApiService {
       if (token != null && token.isNotEmpty) 'bearer': token,
       if (cookie != null && cookie.isNotEmpty) 'cookie': cookie,
       'ids': ids,
+      // The driver's name as SLS has it, for the home screen greeting.
+      if (driverName.isNotEmpty) 'name': driverName,
     });
   }
 

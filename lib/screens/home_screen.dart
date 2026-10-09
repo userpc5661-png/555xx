@@ -12,6 +12,7 @@ import '../services/map_focus_service.dart';
 import '../services/shipment_outcome_tracker.dart';
 import '../services/status_send_queue.dart';
 import '../services/navigation_service.dart';
+import '../services/session_credentials.dart';
 import '../services/location_correction_service.dart';
 import '../services/token_store.dart';
 import '../theme/theme_controller.dart';
@@ -279,7 +280,12 @@ class _HomeScreenState extends State<HomeScreen> {
         IndexedStack(
           index: _index,
           children: [
-            _DashboardPage(tasks: _tasks, onRefresh: _loadTasks),
+            _DashboardPage(
+              tasks: _tasks,
+              onRefresh: _loadTasks,
+              driverName:
+                  SessionCredentials.fromSavedSession(widget.token).driverName,
+            ),
             _TasksPage(
               tasks: _tasks,
               onRefresh: _loadTasks,
@@ -392,8 +398,13 @@ class _PendingSendsBar extends StatelessWidget {
 class _DashboardPage extends StatefulWidget {
   final List<TaskItem> tasks;
   final Future<void> Function() onRefresh;
+  final String driverName;
 
-  const _DashboardPage({required this.tasks, required this.onRefresh});
+  const _DashboardPage({
+    required this.tasks,
+    required this.onRefresh,
+    required this.driverName,
+  });
 
   @override
   State<_DashboardPage> createState() => _DashboardPageState();
@@ -457,6 +468,7 @@ class _DashboardPageState extends State<_DashboardPage> {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         children: [
           _WelcomeCard(
+            driverName: widget.driverName,
             total: widget.tasks.length + localCompleted,
             remaining: remaining,
           ),
@@ -665,10 +677,15 @@ class _SummaryListTile extends StatelessWidget {
 }
 
 class _WelcomeCard extends StatelessWidget {
+  final String driverName;
   final int total;
   final int remaining;
 
-  const _WelcomeCard({required this.total, required this.remaining});
+  const _WelcomeCard({
+    required this.driverName,
+    required this.total,
+    required this.remaining,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -692,9 +709,11 @@ class _WelcomeCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'أهلاً بك، كابتن',
-                  style: TextStyle(
+                Text(
+                  driverName.isEmpty
+                      ? 'أهلاً بك، كابتن'
+                      : 'أهلاً بك، $driverName',
+                  style: const TextStyle(
                     color: Colors.white70,
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
@@ -1253,6 +1272,11 @@ class _MapPageState extends State<_MapPage> {
   Position? _currentPosition;
   double _displayHeading = 0;
   bool _hasHeading = false;
+  // The map turns with the driving direction (GPS course) only while the
+  // car moves; standing still it keeps its direction, and the compass
+  // turns only the arrow.
+  double _cameraBearing = 0;
+  static const double _drivingSpeed = 3; // m/s, about 11 km/h
   // Compass updates arrive many times per second; only the arrow listens to
   // them, so the whole map page is not rebuilt for each one.
   final ValueNotifier<double> _headingNotifier = ValueNotifier<double>(0);
@@ -1262,7 +1286,6 @@ class _MapPageState extends State<_MapPage> {
   List<ml.Marker>? _markerCache;
   List<Object?>? _markerCacheKey;
   int _correctionsVersion = 0;
-  DateTime? _lastCompassCameraUpdate;
   bool _mapReady = false;
   bool _locating = true;
   bool _followUser = true;
@@ -1419,9 +1442,15 @@ class _MapPageState extends State<_MapPage> {
   @override
   void didUpdateWidget(covariant _MapPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _loadMapContactData();
-    _loadLocalStatuses();
-    if (oldWidget.tasks != widget.tasks) {
+    // Calls and local statuses are read again when the list changes or
+    // while the map is on screen (e.g. after a call from a pin), not on
+    // every rebuild of the home screen behind other tabs.
+    final tasksChanged = oldWidget.tasks != widget.tasks;
+    if (tasksChanged || widget.active) {
+      _loadMapContactData();
+      _loadLocalStatuses();
+    }
+    if (tasksChanged) {
       _loadCorrections();
     }
     if (!oldWidget.active && widget.active) {
@@ -1560,14 +1589,14 @@ class _MapPageState extends State<_MapPage> {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       return AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
-        intervalDuration: const Duration(milliseconds: 250),
+        distanceFilter: 2,
+        intervalDuration: const Duration(seconds: 1),
       );
     }
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       return AppleSettings(
         accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 0,
+        distanceFilter: 2,
         activityType: ActivityType.automotiveNavigation,
         pauseLocationUpdatesAutomatically: false,
         allowBackgroundLocationUpdates: false,
@@ -1576,7 +1605,7 @@ class _MapPageState extends State<_MapPage> {
     }
     return const LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 0,
+      distanceFilter: 2,
     );
   }
 
@@ -1597,13 +1626,6 @@ class _MapPageState extends State<_MapPage> {
       final rawHeading = event.heading;
       if (rawHeading == null || !rawHeading.isFinite || rawHeading < 0) return;
       _setHeading(rawHeading, smoothing: 0.28);
-
-      final now = DateTime.now();
-      if (_lastCompassCameraUpdate == null ||
-          now.difference(_lastCompassCameraUpdate!).inMilliseconds >= 80) {
-        _lastCompassCameraUpdate = now;
-        _rotateFollowingCamera();
-      }
     });
   }
 
@@ -1615,6 +1637,11 @@ class _MapPageState extends State<_MapPage> {
       return;
     }
     _setHeading(position.heading, smoothing: 0.42);
+    if (position.speed >= _drivingSpeed) {
+      // Smoothed, so one noisy GPS course does not swing the map.
+      final delta = ((position.heading - _cameraBearing + 540) % 360) - 180;
+      _cameraBearing = (_cameraBearing + delta * 0.6 + 360) % 360;
+    }
   }
 
   void _setHeading(double value, {required double smoothing}) {
@@ -1638,18 +1665,6 @@ class _MapPageState extends State<_MapPage> {
     }
   }
 
-  void _rotateFollowingCamera() {
-    final controller = _mapController;
-    if (!_mapReady || !_followUser || !_hasHeading || controller == null) {
-      return;
-    }
-    unawaited(
-      controller
-          .moveCamera(bearing: _displayHeading, pitch: 45)
-          .catchError((_) {}),
-    );
-  }
-
   void _followPosition(Position position, {bool firstFix = false}) {
     final controller = _mapController;
     if (!_mapReady || !_followUser || controller == null) return;
@@ -1659,16 +1674,44 @@ class _MapPageState extends State<_MapPage> {
         lat: position.latitude,
       );
       final currentZoom = controller.camera?.zoom ?? 16.8;
-      unawaited(
-        controller
-            .moveCamera(
-              center: target,
-              zoom: (!_hasCenteredOnUser || firstFix) ? 16.8 : currentZoom,
-              bearing: _hasHeading ? _displayHeading : 0,
-              pitch: 45,
-            )
-            .catchError((_) {}),
-      );
+      // Closer in the streets, further out on fast roads, so the next
+      // turn stays in view.
+      final speed = position.speed.isFinite ? position.speed : 0.0;
+      final speedZoom = speed >= 22
+          ? 15.0
+          : speed >= 12
+              ? 16.0
+              : 16.8;
+      final zoom = (!_hasCenteredOnUser || firstFix)
+          ? 16.8
+          : speed >= _drivingSpeed && (speedZoom - currentZoom).abs() >= 0.5
+              ? speedZoom
+              : currentZoom;
+      if (!_hasCenteredOnUser || firstFix) {
+        unawaited(
+          controller
+              .moveCamera(
+                center: target,
+                zoom: zoom,
+                bearing: _cameraBearing,
+                pitch: 45,
+              )
+              .catchError((_) {}),
+        );
+      } else {
+        // Glides to each new fix (about once a second) instead of jumping.
+        unawaited(
+          controller
+              .animateCamera(
+                center: target,
+                zoom: zoom,
+                bearing: _cameraBearing,
+                pitch: 45,
+                nativeDuration: const Duration(milliseconds: 900),
+              )
+              .catchError((_) {}),
+        );
+      }
       _hasCenteredOnUser = true;
     } catch (_) {
       // The controller may not be attached while switching tabs.
@@ -2077,10 +2120,7 @@ class _MapPageState extends State<_MapPage> {
           point: point,
           size: const Size(48, 48),
           alignment: Alignment.bottomCenter,
-          child: Tooltip(
-            message: firstTask.storeName.isNotEmpty
-                ? firstTask.storeName
-                : firstTask.displayReference,
+          child: RepaintBoundary(
             child: GestureDetector(
               onTap: () => _showTask(firstTask),
               child: Stack(
@@ -2107,8 +2147,7 @@ class _MapPageState extends State<_MapPage> {
         point: point,
         size: const Size(52, 52),
         alignment: Alignment.bottomCenter,
-        child: Tooltip(
-          message: '${clusterTasks.length} شحنات في هذا الموقع',
+        child: RepaintBoundary(
           child: GestureDetector(
             onTap: () => _showClusterTasks(clusterTasks, point),
             child: Stack(
@@ -2326,7 +2365,7 @@ class _MapPageState extends State<_MapPage> {
                     initCenter: initialCenter,
                     initZoom: _currentPosition != null ? 16.3 : 11,
                     initPitch: 45,
-                    initBearing: _hasHeading ? _displayHeading : 0,
+                    initBearing: _cameraBearing,
                     minZoom: 3,
                     maxZoom: 20,
                     maxPitch: 60,
