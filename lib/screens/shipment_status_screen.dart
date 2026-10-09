@@ -13,6 +13,9 @@ import '../models/task_item.dart';
 import '../services/alert_sounds.dart';
 import '../services/developer_diagnostics_service.dart';
 import '../services/delivery_history_store.dart';
+import '../services/offline_cache.dart';
+import '../services/offline_mode.dart';
+import '../services/offline_queue.dart';
 import '../services/phone_action_service.dart';
 import '../services/scan_api_service.dart';
 import '../services/softpos_service.dart';
@@ -273,11 +276,22 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
     // 1. Try authoritative data already in the task (e.g. from Smart Scanner)
     options = _extractOptions(task.raw);
 
+    // Offline mode: the choices saved from SLS for this kind of shipment;
+    // the server is asked only when none were saved.
+    final cacheKey = OfflineCache.statusKey(task);
+    final offline = OfflineMode.isOn;
+    if (options.isEmpty && offline) {
+      options = await OfflineCache.loadStatusOptions(cacheKey);
+    }
+    Future<T> limit<T>(Future<T> request) => offline
+        ? request.timeout(const Duration(seconds: 8))
+        : request;
+
     // 2. If empty and we need statuses, call the authoritative scanOrder
     // endpoint just like the Smart Scanner does.
     if (options.isEmpty) {
       try {
-        final shipment = await _api.scanOrder(awb);
+        final shipment = await limit(_api.scanOrder(awb));
         options = _extractOptions(shipment.raw);
       } catch (e) {
         debugPrint('Discovery: scanOrder failed for $awb: $e');
@@ -289,22 +303,22 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       Map<String, dynamic>? withoutScan;
       Map<String, dynamic>? withScan;
       try {
-        withoutScan = await _api.getDriverStatuses(
+        withoutScan = await limit(_api.getDriverStatuses(
           withoutScan: true,
           currentStatus: task.statusId ?? task.statusCode,
           currentStatusLabel: task.statusLabel,
           currentIsRvp: task.isRvp,
           currentOrderType: task.orderTypeId ?? task.orderType,
-        );
+        ));
       } catch (_) {}
       try {
-        withScan = await _api.getDriverStatuses(
+        withScan = await limit(_api.getDriverStatuses(
           withoutScan: false,
           currentStatus: task.statusId ?? task.statusCode,
           currentStatusLabel: task.statusLabel,
           currentIsRvp: task.isRvp,
           currentOrderType: task.orderTypeId ?? task.orderType,
-        );
+        ));
       } catch (_) {}
 
       final regular = _extractOptions(withoutScan ?? const {});
@@ -322,6 +336,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       options = merged.values.toList();
     }
 
+    unawaited(OfflineCache.saveStatusOptions(cacheKey, options));
     if (!mounted) return;
 
     options.sort((a, b) {
@@ -336,7 +351,9 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
       _selected = options.isEmpty ? null : options.first;
       _loading = false;
       if (options.isEmpty) {
-        _error = 'لا توجد حالات متاحة لهذه الشحنة حاليًا في نظام SLS.';
+        _error = offline
+            ? 'ما فيه حالات محفوظة لهذي الشحنة. ${OfflineMode.needsInternetMessage}'
+            : 'لا توجد حالات متاحة لهذه الشحنة حاليًا في نظام SLS.';
       }
     });
   }
@@ -713,6 +730,53 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
           ? widget.awbOverride!.trim()
           : widget.task.realAwb.trim();
 
+      // Offline mode: everything is saved on the phone and sent when the
+      // driver switches to Online.
+      final image = _image;
+      final softPosTransactionId = _softPosTransactionId;
+      final rescheduleAt = _rescheduleAt;
+      Future<void> storeOffline() => OfflineQueue.instance.add(
+            awb: awb,
+            task: widget.task,
+            displayLabel: displayLabel,
+            statusId: statusId,
+            statusLabel: officialStatusLabel,
+            delivered: delivered,
+            nationalAddress:
+                needsAddress && address.isNotEmpty ? address : null,
+            rescheduleDate: rescheduleAt == null
+                ? null
+                : _formatOfficialDate(rescheduleAt),
+            codPaymentMethod: delivered && isCod
+                ? (_codPaymentMethod == _CodPaymentMethod.softPos
+                    ? 'pos'
+                    : 'cash')
+                : null,
+            customerCodPaymentId: softPosTransactionId,
+            imagePath: image?.path,
+            imageName: image?.name,
+            assigneeId: assigneeId,
+            latitude: latitude,
+            longitude: longitude,
+          );
+
+      Future<void> saveOffline() async {
+        await storeOffline();
+        AlertSounds.success();
+        if (!mounted) return;
+        TopToast.show(
+          context,
+          '⏳ انحفظت ($displayLabel) $awb — تنرسل للسيرفر لما تحوّل أونلاين',
+          kind: TopToastKind.warning,
+        );
+        Navigator.of(context).pop(true);
+      }
+
+      if (OfflineMode.isOn) {
+        await saveOffline();
+        return;
+      }
+
       final body = <String, dynamic>{
         'status': statusId,
         'status_label': officialStatusLabel,
@@ -874,6 +938,7 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
         outcome = await job.future.timeout(const Duration(seconds: 8));
       } on TimeoutException {
         job.detached = true;
+        job.saveOffline = storeOffline;
         unawaited(job.future.then((late) {
           TopToast.showOn(
             overlay,
@@ -899,6 +964,32 @@ class _ShipmentStatusScreenState extends State<ShipmentStatusScreen> {
 
       if (!outcome.ok) {
         final error = outcome.error;
+        if (OfflineMode.isNetworkError(error) && mounted) {
+          final save = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('النت ضعيف'),
+              content: Text(
+                'ما وصلت الحالة للسيرفر ($displayLabel) $awb.\n'
+                'تحفظها على الجوال وتنرسل لما تحوّل أونلاين؟',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('لا'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('احفظها أوفلاين'),
+                ),
+              ],
+            ),
+          );
+          if (save == true) {
+            await saveOffline();
+            return;
+          }
+        }
         if (error is ScanApiException) throw error;
         throw error ?? const ScanApiException('تعذر إرسال الحالة.');
       }

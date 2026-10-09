@@ -9,6 +9,9 @@ import 'package:maplibre/maplibre.dart' as ml;
 import '../models/task_item.dart';
 import '../services/api_service.dart';
 import '../services/map_focus_service.dart';
+import '../services/offline_cache.dart';
+import '../services/offline_mode.dart';
+import '../services/offline_queue.dart';
 import '../services/shipment_outcome_tracker.dart';
 import '../services/status_send_queue.dart';
 import '../services/navigation_service.dart';
@@ -62,7 +65,47 @@ class _HomeScreenState extends State<HomeScreen> {
       },
     );
     MapFocusService.requests.addListener(_onMapFocusRequest);
-    _loadTasks();
+    unawaited(_start());
+  }
+
+  Future<void> _start() async {
+    await OfflineMode.load();
+    await OfflineQueue.instance.load();
+    await _loadTasks();
+  }
+
+  Future<void> _setOffline(bool offline) async {
+    await OfflineMode.set(offline);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          offline
+              ? 'وضع أوفلاين: الحالات تنحفظ على الجوال وتنرسل لما تحوّل أونلاين.'
+              : 'وضع أونلاين.',
+        ),
+      ),
+    );
+    if (!offline && OfflineQueue.instance.items.value.isNotEmpty) {
+      await _syncQueue();
+    }
+  }
+
+  /// Sends the statuses saved in offline mode, one by one, in order.
+  Future<void> _syncQueue() async {
+    if (OfflineMode.isOn) return;
+    final result = await OfflineQueue.instance.sync(widget.token);
+    if (!mounted) return;
+    final parts = <String>[
+      if (result.sent > 0) 'انرسلت ${result.sent} ✅',
+      if (result.failed > 0) '${result.failed} رفضها السيرفر ❌',
+      if (result.stoppedByNetwork) 'النت ضعيف، الباقي ينتظر',
+    ];
+    if (parts.isNotEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(parts.join(' • '))));
+    }
+    if (result.sent > 0) await _loadTasks();
   }
 
   void _onMapFocusRequest() {
@@ -86,9 +129,19 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
 
+    // Offline mode: show the saved list right away; the server is still
+    // tried, but without a long wait.
+    if (_tasks.isEmpty && OfflineMode.isOn) {
+      await _showCachedTasks();
+    }
+
     try {
-      final tasks = await _api.fetchTasks(widget.token);
+      final request = _api.fetchTasks(widget.token);
+      final tasks = OfflineMode.isOn
+          ? await request.timeout(const Duration(seconds: 10))
+          : await request;
       if (!mounted) return;
+      unawaited(OfflineCache.saveTasks(tasks));
 
       final activeKeys = tasks
           .map((t) => '${t.referenceNumber}_${t.id}')
@@ -123,13 +176,20 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
       if (!mounted) return;
+      final network = OfflineMode.isNetworkError(error);
+      if (network && _tasks.isEmpty) await _showCachedTasks();
+      if (!mounted) return;
       setState(() {
         _error = error;
       });
-      if (hasExistingData) {
+      if (_tasks.isNotEmpty) {
+        final message = !network
+            ? error.toString()
+            : '${OfflineMode.isOn ? OfflineMode.needsInternetMessage : 'النت ضعيف أو مقطوع.'}'
+                ' القائمة المعروضة محفوظة من آخر تحديث.';
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        ).showSnackBar(SnackBar(content: Text(message)));
       }
     } finally {
       if (mounted) {
@@ -139,6 +199,16 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
     }
+  }
+
+  Future<void> _showCachedTasks() async {
+    final cached = await OfflineCache.loadTasks();
+    if (cached.isEmpty || !mounted || _tasks.isNotEmpty) return;
+    SuspiciousAddresses.update(cached);
+    setState(() {
+      _tasks = cached;
+      _loading = false;
+    });
   }
 
   Future<void> _handleScanCompleted() async {
@@ -181,6 +251,22 @@ class _HomeScreenState extends State<HomeScreen> {
             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
           ),
           actions: [
+            ValueListenableBuilder<bool>(
+              valueListenable: OfflineMode.enabled,
+              builder: (context, offline, _) => TextButton.icon(
+                onPressed: () => _setOffline(!offline),
+                style: TextButton.styleFrom(
+                  foregroundColor:
+                      offline ? Colors.orange.shade800 : Colors.green.shade700,
+                  visualDensity: VisualDensity.compact,
+                ),
+                icon: Icon(
+                  offline ? Icons.cloud_off_rounded : Icons.cloud_done_rounded,
+                  size: 20,
+                ),
+                label: Text(offline ? 'أوفلاين' : 'أونلاين'),
+              ),
+            ),
             IconButton(
               onPressed: () => ThemeController.instance.toggle(context),
               icon: Icon(
@@ -267,6 +353,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Column(
       children: [
+        _OfflineBar(onSend: _syncQueue),
         const _PendingSendsBar(),
         Expanded(child: _buildPages()),
       ],
@@ -370,6 +457,15 @@ class _PendingSendsBar extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (job.saveOffline != null &&
+                            OfflineMode.isNetworkError(job.error))
+                          TextButton(
+                            onPressed: () async {
+                              await job.saveOffline!();
+                              StatusSendQueue.instance.dismiss(job);
+                            },
+                            child: const Text('احفظها أوفلاين'),
+                          ),
                         IconButton(
                           visualDensity: VisualDensity.compact,
                           tooltip: 'إخفاء',
@@ -386,6 +482,191 @@ class _PendingSendsBar extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+/// Offline mode and the statuses saved on the phone: how many wait to be
+/// sent, a button to send them when Online, and their list.
+class _OfflineBar extends StatelessWidget {
+  final Future<void> Function() onSend;
+  const _OfflineBar({required this.onSend});
+
+  @override
+  Widget build(BuildContext context) {
+    final queue = OfflineQueue.instance;
+    return ValueListenableBuilder<bool>(
+      valueListenable: OfflineMode.enabled,
+      builder: (context, offline, _) =>
+          ValueListenableBuilder<List<OfflineStatusUpdate>>(
+        valueListenable: queue.items,
+        builder: (context, items, _) => ValueListenableBuilder<bool>(
+          valueListenable: queue.syncing,
+          builder: (context, syncing, _) {
+            if (!offline && items.isEmpty) return const SizedBox.shrink();
+            final failed = items
+                .where((item) => item.state == OfflineItemState.failed)
+                .length;
+            final waiting = items.length - failed;
+            return Material(
+              color: offline
+                  ? Colors.orange.withValues(alpha: 0.15)
+                  : Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: InkWell(
+                onTap: items.isEmpty ? null : () => _showList(context),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+                  child: Row(
+                    children: [
+                      Icon(
+                        offline
+                            ? Icons.cloud_off_rounded
+                            : Icons.cloud_upload_rounded,
+                        size: 18,
+                        color: offline ? Colors.orange.shade800 : null,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          [
+                            if (offline) 'وضع أوفلاين',
+                            if (waiting > 0) '⏳ $waiting تنتظر الإرسال',
+                            if (failed > 0) '❌ $failed رفضها السيرفر',
+                            if (items.isEmpty) 'الحالات تنحفظ على الجوال',
+                          ].join(' • '),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: failed > 0 ? Colors.red : null,
+                          ),
+                        ),
+                      ),
+                      if (syncing)
+                        const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      else if (!offline && items.isNotEmpty)
+                        TextButton(
+                          onPressed: onSend,
+                          child: const Text('إرسال الآن'),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showList(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: SafeArea(
+          child: FractionallySizedBox(
+            heightFactor: 0.75,
+            child: ValueListenableBuilder<List<OfflineStatusUpdate>>(
+              valueListenable: OfflineQueue.instance.items,
+              builder: (context, items, _) => ListView(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                children: [
+                  const Text(
+                    'الحالات المحفوظة على الجوال',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'تنرسل بالترتيب لما تحوّل أونلاين. وقت التسليم في السيرفر يكون وقت الإرسال.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final item in items) _OfflineItemTile(item: item),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OfflineItemTile extends StatelessWidget {
+  final OfflineStatusUpdate item;
+  const _OfflineItemTile({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final failed = item.state == OfflineItemState.failed;
+    final sending = item.state == OfflineItemState.sending;
+    final color = failed ? Colors.red : Colors.orange.shade800;
+    final time = TimeOfDay.fromDateTime(item.savedAt).format(context);
+    return Card(
+      color: color.withValues(alpha: 0.08),
+      child: ListTile(
+        leading: sending
+            ? const SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(
+                failed ? Icons.error_rounded : Icons.hourglass_top_rounded,
+                color: color,
+              ),
+        title: Text(
+          '${item.reference.isEmpty ? item.awb : item.reference} — ${item.displayLabel}',
+          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+        ),
+        subtitle: Text(
+          [
+            if (item.customerName.isNotEmpty) item.customerName,
+            'انحفظت $time',
+            if (failed) 'السبب: ${item.error ?? ''}',
+          ].join('\n'),
+          style: TextStyle(color: failed ? Colors.red : null),
+        ),
+        trailing: sending
+            ? null
+            : IconButton(
+                tooltip: 'حذف',
+                icon: const Icon(Icons.delete_outline_rounded),
+                onPressed: () => _confirmDelete(context),
+              ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('حذف الحالة المحفوظة؟'),
+        content: Text(
+          'ما راح تنرسل للسيرفر: ${item.reference.isEmpty ? item.awb : item.reference} — ${item.displayLabel}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await OfflineQueue.instance.remove(item);
   }
 }
 

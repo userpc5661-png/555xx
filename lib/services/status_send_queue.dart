@@ -27,10 +27,14 @@ class StatusSendJob {
   final String label;
   StatusSendState state = StatusSendState.sending;
   String? message;
+  Object? error;
 
   /// True once the status screen has closed and the job finishes on its
   /// own; a failure then stays in the list until the driver dismisses it.
   bool detached = false;
+
+  /// Saves this update in the offline queue instead (weak network).
+  Future<void> Function()? saveOffline;
 
   late final Future<StatusSendOutcome> future;
 
@@ -86,7 +90,8 @@ class StatusSendQueue {
       } else if (job.detached) {
         job
           ..state = StatusSendState.failed
-          ..message = '${outcome.error}';
+          ..message = '${outcome.error}'
+          ..error = outcome.error;
         jobs.value = List.unmodifiable(jobs.value);
       } else {
         // The screen is still open and shows the error itself.
