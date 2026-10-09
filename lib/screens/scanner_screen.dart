@@ -9,7 +9,6 @@ import '../models/scan_models.dart';
 import '../models/task_item.dart';
 import '../repositories/scan_repository.dart';
 import '../services/developer_diagnostics_service.dart';
-import '../services/label_address_resolver.dart';
 import '../services/scan_api_service.dart';
 import 'shipment_status_screen.dart';
 
@@ -35,24 +34,8 @@ class _ScannerScreenState extends State<ScannerScreen>
     autoStart: true,
     facing: CameraFacing.back,
     detectionSpeed: DetectionSpeed.normal,
-    // The frame of each detected barcode is kept so the label's National
-    // Address can be read from it; a sharper frame reads small text better.
-    returnImage: true,
-    cameraResolution: const Size(1920, 1080),
   );
-  Uint8List? _lastFrame;
-  int _labelsCorrected = 0;
-  int _labelsUnread = 0;
-  String? _lastLabelNote;
-  bool _lastLabelOk = true;
-  // Group scan: a shipment is confirmed only once its label's National
-  // Address is read (or the driver confirms without it after 3 tries).
-  static const _labelAttemptsBeforeOverride = 3;
-  final Map<String, int> _labelAttempts = {};
-  // Addresses read once (not yet confirmed by a second, matching read).
-  final Map<String, List<String>> _labelReads = {};
   final Map<String, ScannedShipment> _shipmentCache = {};
-  final Map<String, String> _labelByOrderKey = {};
   late final ScanRepository _repository;
 
   late final _ScanMode _mode;
@@ -99,19 +82,6 @@ class _ScannerScreenState extends State<ScannerScreen>
       }..remove('');
       return keys.any(scanned.contains);
     });
-  }
-
-  /// Display only: whether [order] was scanned (now or before this session).
-  String? _labelOf(GroupOrder order) {
-    for (final key in {
-      _key(order.referenceNumber),
-      _key(order.orderId),
-      if (order.id != null) '${order.id}',
-    }) {
-      final value = _labelByOrderKey[key];
-      if (value != null) return value;
-    }
-    return null;
   }
 
   bool _isOrderScanned(GroupOrder order) {
@@ -246,7 +216,6 @@ class _ScannerScreenState extends State<ScannerScreen>
     if (code == null) return;
 
     _handled = true;
-    _lastFrame = capture.image;
     await _controller.stop();
     if (!mounted) return;
     setState(() {
@@ -644,51 +613,8 @@ class _ScannerScreenState extends State<ScannerScreen>
     // Same requests as before; a failure is only recorded for the list
     // ("scanned but not in this group") and then shown as usual.
     ScannedShipment? shipment;
-    String? labelAddress;
     try {
       shipment = _shipmentCache[awb] ??= await _repository.scanOrder(awb);
-
-      final frame = _lastFrame;
-      if (mounted) setState(() => _lastLabelNote = 'جارٍ قراءة العنوان الوطني…');
-      final read = frame == null
-          ? null
-          : await readCustomerShortFromFrame(jpeg: frame, order: shipment.raw);
-      // OCR can misread one letter or digit. A read is used when both
-      // prints on the label agree (or it is the server's own address), or
-      // when a second read of the label gives the same address.
-      final earlier = _labelReads[awb] ??= [];
-      if (read != null) {
-        if (read.confirmed || earlier.contains(read.value)) {
-          labelAddress = read.value;
-        } else {
-          earlier.add(read.value);
-        }
-      }
-      if (labelAddress == null) {
-        final attempts = (_labelAttempts[awb] ?? 0) + 1;
-        _labelAttempts[awb] = attempts;
-        if (attempts < _labelAttemptsBeforeOverride) {
-          await _retryLabel(
-            read == null
-                ? 'لم يُقرأ العنوان الوطني لـ $awb (محاولة $attempts من '
-                    '$_labelAttemptsBeforeOverride). خلّ البوليصة كاملة وواضحة داخل الإطار.'
-                : 'قرأت ${read.value} لـ $awb. امسح البوليصة مرة ثانية للتأكد '
-                    'من القراءة (محاولة $attempts من $_labelAttemptsBeforeOverride).',
-          );
-          return;
-        }
-        final choice = await _askConfirmWithoutAddress(
-          awb,
-          earlier.toSet().toList(),
-        );
-        if (choice == null) {
-          _labelAttempts[awb] = 0;
-          _labelReads.remove(awb);
-          await _retryLabel('صوّر البوليصة مرة أخرى داخل الإطار.');
-          return;
-        }
-        if (choice.isNotEmpty) labelAddress = choice;
-      }
 
       await _repository.confirmOrder(
         groupId: group.id,
@@ -708,8 +634,6 @@ class _ScannerScreenState extends State<ScannerScreen>
       rethrow;
     }
     final confirmed = shipment;
-    _labelAttempts.remove(awb);
-    _labelReads.remove(awb);
     _shipmentCache.remove(awb);
     final orderKeys = {
       _key(awb),
@@ -717,26 +641,11 @@ class _ScannerScreenState extends State<ScannerScreen>
       _key(confirmed.actualAwb),
       '${confirmed.id}',
     }..remove('');
-    final address = labelAddress;
-    if (address != null) {
-      for (final key in orderKeys) {
-        _labelByOrderKey[key] = address;
-      }
-      unawaited(_storeLabel(awb, confirmed.raw, address));
-    }
     if (!mounted) return;
     setState(() {
       _confirmedAwbs.add(awb);
       _confirmedOrderKeys.addAll(orderKeys);
       _locallyConfirmedCount += 1;
-      if (address == null) {
-        _labelsUnread++;
-        _lastLabelNote = '$awb: أُكدت بدون عنوان وطني';
-        _lastLabelOk = false;
-      } else {
-        _lastLabelNote = '✓ $awb: $address';
-        _lastLabelOk = true;
-      }
       _busy = false;
       _lastCode = null;
       _handled = false;
@@ -744,113 +653,10 @@ class _ScannerScreenState extends State<ScannerScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         duration: const Duration(milliseconds: 1200),
-        content: Text(
-          address == null
-              ? 'تم تأكيد الشحنة $awb (بدون عنوان)'
-              : 'تم تأكيد الشحنة $awb — $address',
-        ),
+        content: Text('تم تأكيد الشحنة $awb'),
       ),
     );
     await _controller.start();
-  }
-
-  /// Keeps scanning the same label: the next frames are read again.
-  Future<void> _retryLabel(String message) async {
-    if (!mounted) return;
-    setState(() {
-      _lastLabelNote = message;
-      _lastLabelOk = false;
-      _busy = false;
-      _lastCode = null;
-      _handled = false;
-    });
-    await Future<void>.delayed(const Duration(milliseconds: 700));
-    if (mounted) await _controller.start();
-  }
-
-  /// After the last attempt: the driver picks the address printed on the
-  /// label among the reads (checking it on the label), confirms without an
-  /// address (""), or tries again (null).
-  Future<String?> _askConfirmWithoutAddress(
-    String awb,
-    List<String> reads,
-  ) async {
-    if (!mounted) return null;
-    return showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          reads.isEmpty ? 'لم يُقرأ العنوان الوطني' : 'تأكد من العنوان الوطني',
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              reads.isEmpty
-                  ? 'حاولت $_labelAttemptsBeforeOverride مرات ولم أقرأ العنوان '
-                      'الوطني للشحنة $awb.\nإذا كانت البوليصة تالفة أو بلا عنوان '
-                      'يمكنك التأكيد بدونه، وتصحيح الموقع لاحقًا من "تصوير البوليصة".'
-                  : 'القراءات لم تتطابق للشحنة $awb. اختر العنوان المطبوع في '
-                      'البوليصة بعد "To National Address" إذا كان من هذه، '
-                      'أو أعد المحاولة:',
-            ),
-            for (final value in reads) ...[
-              const SizedBox(height: 8),
-              OutlinedButton(
-                onPressed: () => Navigator.pop(context, value),
-                child: Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إعادة المحاولة'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, ''),
-            child: const Text('تأكيد بدون عنوان'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Stores the label address and its location in the background.
-  Future<void> _storeLabel(
-    String awb,
-    Map<String, dynamic> order,
-    String address,
-  ) async {
-    final result = await storeLabelAddress(
-      code: awb,
-      order: order,
-      shortAddress: address,
-    );
-    if (!mounted) return;
-    setState(() {
-      switch (result.status) {
-        case LabelCaptureStatus.corrected:
-          _labelsCorrected++;
-          _lastLabelNote = '📍 $awb: موقع صُحح من البوليصة $address';
-          _lastLabelOk = true;
-        case LabelCaptureStatus.sameAsServer:
-          break;
-        case LabelCaptureStatus.notLocated:
-        case LabelCaptureStatus.unreadable:
-          _lastLabelNote = '$awb: قُرئ $address ولم يُحدد موقعه بعد';
-          _lastLabelOk = false;
-      }
-    });
   }
 
   Future<void> _executeLinehaulAction() async {
@@ -915,7 +721,6 @@ class _ScannerScreenState extends State<ScannerScreen>
               Flexible(child: _GroupOrdersList(
                 orders: group.orders,
                 isScanned: _isOrderScanned,
-                labelOf: _labelOf,
                 notInGroup: _notInGroup,
               )),
             ],
@@ -984,7 +789,6 @@ class _ScannerScreenState extends State<ScannerScreen>
                   child: _GroupOrdersList(
                     orders: group.orders,
                     isScanned: _isOrderScanned,
-                labelOf: _labelOf,
                     notInGroup: _notInGroup,
                   ),
                 ),
@@ -1044,53 +848,16 @@ class _ScannerScreenState extends State<ScannerScreen>
           },
           errorBuilder: _buildCameraError,
         ),
-        if (_orderGroup != null)
-          // Portrait 10x15 cm label: the whole label, not only the barcode,
-          // must be in view so its National Address can be read.
-          Align(
-            alignment: const Alignment(0, -0.75),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final width = MediaQuery.of(context).size.width * 0.6;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: width,
-                      height: width * 1.5,
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: _lastLabelOk ? Colors.white : Colors.orange,
-                          width: 3,
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'خلّ البوليصة كاملة داخل الإطار',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        shadows: [Shadow(blurRadius: 4)],
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          )
-        else
-          Center(
-            child: Container(
-              width: 270,
-              height: 210,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white, width: 3),
-                borderRadius: BorderRadius.circular(20),
-              ),
+        Center(
+          child: Container(
+            width: 270,
+            height: 210,
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.white, width: 3),
+              borderRadius: BorderRadius.circular(20),
             ),
           ),
+        ),
         Positioned(
           left: 16,
           right: 16,
@@ -1136,29 +903,11 @@ class _ScannerScreenState extends State<ScannerScreen>
                                 : _confirmedCount / _orderGroup!.orders.length,
                           ),
                           const SizedBox(height: 6),
-                          if (_lastLabelNote != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 4),
-                              child: Text(
-                                '$_lastLabelNote\n'
-                                'مواقع صُححت من البوالص: $_labelsCorrected'
-                                '${_labelsUnread > 0 ? '  •  بدون عنوان: $_labelsUnread' : ''}',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: _lastLabelOk
-                                      ? Colors.green.shade700
-                                      : Colors.orange.shade800,
-                                ),
-                              ),
-                            ),
                           ConstrainedBox(
                             constraints: const BoxConstraints(maxHeight: 170),
                             child: _GroupOrdersList(
                               orders: _orderGroup!.orders,
                               isScanned: _isOrderScanned,
-                labelOf: _labelOf,
                               notInGroup: _notInGroup,
                               compact: true,
                             ),
@@ -1268,12 +1017,10 @@ class _GroupOrdersList extends StatelessWidget {
   final bool Function(GroupOrder) isScanned;
   final List<_NotInGroupScan> notInGroup;
   final bool compact;
-  final String? Function(GroupOrder)? labelOf;
 
   const _GroupOrdersList({
     required this.orders,
     required this.isScanned,
-    this.labelOf,
     this.notInGroup = const [],
     this.compact = false,
   });
@@ -1319,7 +1066,7 @@ class _GroupOrdersList extends StatelessWidget {
           number: _number(order),
           color: Colors.green,
           icon: Icons.check_circle,
-          note: labelOf?.call(order) ?? 'تم المسح',
+          note: 'تم المسح',
           strike: false,
           compact: compact,
         ),

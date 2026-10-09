@@ -20,9 +20,7 @@ import '../widgets/task_card.dart';
 import '../services/local_contact_controller.dart';
 import '../services/local_contact_store.dart';
 import '../services/local_shipment_status_store.dart';
-import '../services/label_address_store.dart';
 import '../utils/suspicious_addresses.dart';
-import 'label_batch_screen.dart';
 import 'login_screen.dart';
 import 'scanner_screen.dart';
 import 'settings_screen.dart';
@@ -64,7 +62,6 @@ class _HomeScreenState extends State<HomeScreen> {
       },
     );
     MapFocusService.requests.addListener(_onMapFocusRequest);
-    LabelAddressStore.instance.load();
     _loadTasks();
   }
 
@@ -107,8 +104,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _contactController.scheduleNextReminder();
 
       SuspiciousAddresses.update(tasks);
-      // Label addresses read while scanning become the customers' locations.
-      unawaited(LabelAddressStore.instance.applyToTasks(tasks));
       setState(() {
         _tasks = tasks;
         _error = null;
@@ -1133,10 +1128,6 @@ class _TasksPageState extends State<_TasksPage> {
 
     return Column(
       children: [
-        _LabelFixBanner(
-          tasks: widget.tasks,
-          savedSession: widget.savedSession,
-        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
           child: TextField(
@@ -2630,68 +2621,6 @@ class _CorrectedLegendIcon extends StatelessWidget {
       ],
     ),
   );
-}
-
-/// Shown when shipments share one default server address: opens the
-/// label-photo screen to read each customer's real National Address.
-class _LabelFixBanner extends StatelessWidget {
-  final List<TaskItem> tasks;
-  final String savedSession;
-
-  const _LabelFixBanner({required this.tasks, required this.savedSession});
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<Set<String>>(
-      valueListenable: SuspiciousAddresses.keys,
-      builder: (context, keys, _) => ValueListenableBuilder<Map<String, String>>(
-        valueListenable: LabelAddressStore.instance.values,
-        builder: (context, labels, _) {
-          final pending = tasks
-              .where((t) =>
-                  keys.contains(SuspiciousAddresses.taskKey(t)) &&
-                  LabelAddressStore.instance.forTask(t) == null)
-              .length;
-          if (pending == 0) return const SizedBox.shrink();
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Material(
-              color: Colors.red.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => LabelBatchScreen(
-                      tasks: tasks,
-                      savedSession: savedSession,
-                    ),
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.warning_amber_rounded, color: Colors.red),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '$pending شحنة عنوانها مكرر لعدة عملاء وغير موثوق. '
-                          'اضغط لتصوير البوالص وتصحيح المواقع.',
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                      const Icon(Icons.document_scanner_rounded),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
 }
 
 class _ScannerTab extends StatelessWidget {

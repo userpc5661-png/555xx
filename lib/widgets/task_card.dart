@@ -17,7 +17,7 @@ import '../utils/phone_number_utils.dart';
 import 'location_correction_dialog.dart';
 import 'location_sources_sheet.dart';
 import 'shipment_raw_sheet.dart';
-import '../services/label_address_store.dart';
+import '../services/location_correction_service.dart';
 import '../utils/suspicious_addresses.dart';
 
 class TaskCard extends StatelessWidget {
@@ -637,7 +637,7 @@ class TaskCard extends StatelessWidget {
                         task.displayStoreName,
                         style: TextStyle(color: Colors.grey[600], fontSize: 13),
                       ),
-                      _LabelAddressChip(task: task),
+                      _SharedAddressChip(task: task),
                       if (task.isReverse)
                         Container(
                           margin: const EdgeInsets.only(top: 4),
@@ -954,48 +954,52 @@ class _ModernInfoRow extends StatelessWidget {
   }
 }
 
-/// Green when the customer's National Address was read from the label;
-/// red when the server address is a shared default (tap to fix).
-class _LabelAddressChip extends StatelessWidget {
+/// Red when the server gives the same location to several customers (a
+/// wrong default) and the driver has not corrected it yet. Tap to fix.
+class _SharedAddressChip extends StatelessWidget {
   final TaskItem task;
-  const _LabelAddressChip({required this.task});
+  const _SharedAddressChip({required this.task});
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<Map<String, String>>(
-      valueListenable: LabelAddressStore.instance.values,
-      builder: (context, labels, _) => ValueListenableBuilder<Set<String>>(
-        valueListenable: SuspiciousAddresses.keys,
-        builder: (context, keys, _) {
-          final label = LabelAddressStore.instance.forTask(task);
-          final suspicious = keys.contains(SuspiciousAddresses.taskKey(task));
-          if (label == null && !suspicious) return const SizedBox.shrink();
-          final color = label != null ? Colors.green : Colors.red;
-          return GestureDetector(
-            onTap: label != null
-                ? null
-                : () => showLocationCorrectionDialog(context, task),
-            child: Container(
-              margin: const EdgeInsets.only(top: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                label != null
-                    ? '✓ العنوان من البوليصة: $label'
-                    : '⚠️ عنوان مكرر لعدة عملاء — صوّر البوليصة',
-                style: TextStyle(
-                  color: color,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: SuspiciousAddresses.keys,
+      builder: (context, keys, _) {
+        if (!keys.contains(SuspiciousAddresses.taskKey(task))) {
+          return const SizedBox.shrink();
+        }
+        return ValueListenableBuilder<LocationCorrectionChange?>(
+          valueListenable: LocationCorrectionService.changes,
+          builder: (context, _, __) => FutureBuilder<CorrectedLocation?>(
+            future: LocationCorrectionService.load(task),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done ||
+                  snapshot.data != null) {
+                return const SizedBox.shrink();
+              }
+              return GestureDetector(
+                onTap: () => showLocationCorrectionDialog(context, task),
+                child: Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    '⚠️ موقع مكرر لعدة عملاء — اضغط لتصحيحه',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          );
-        },
-      ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }

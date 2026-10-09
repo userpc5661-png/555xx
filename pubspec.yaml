@@ -19,7 +19,6 @@ dependencies:
   maplibre: ^0.3.5
   image_picker: ^1.1.2
   geocoding: ^5.0.0
-  google_mlkit_text_recognition: 0.15.0
   path_provider: ^2.1.6
   share_plus: ^13.3.1
 
@@ -30,8 +29,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
-dependency_overrides:
-  # mobile_scanner 6 uses GoogleMLKit 7 (MLKitVision ~> 8) on iOS; pin the
-  # ML Kit commons to the release built on the same MLKitVision.
-  google_mlkit_commons: 0.11.0
