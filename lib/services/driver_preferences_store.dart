@@ -24,4 +24,21 @@ class DriverPreferencesStore {
   }
 
   Future<void> clearWhatsAppNumber() => _storage.delete(key: _whatsAppKey);
+
+  static const _satelliteKey = 'map_satellite_v1';
+
+  /// Whether the map opens on the satellite view.
+  Future<bool> readSatelliteMap() async {
+    try {
+      return await _storage.read(key: _satelliteKey) == '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> saveSatelliteMap(bool on) async {
+    try {
+      await _storage.write(key: _satelliteKey, value: on ? '1' : '0');
+    } catch (_) {}
+  }
 }

@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:maplibre/maplibre.dart' as ml;
+import '../config/map_config.dart';
 import '../models/task_item.dart';
 import '../services/api_service.dart';
+import '../services/driver_preferences_store.dart';
 import '../services/map_focus_service.dart';
 import '../services/shipment_outcome_tracker.dart';
 import '../services/status_send_queue.dart';
@@ -1296,6 +1298,11 @@ class _MapPageState extends State<_MapPage> {
   final Map<String, CorrectedLocation> _corrections = {};
   int _correctionsGeneration = 0;
 
+  // Satellite view (real buildings) or the street map; remembered.
+  bool _satellite = false;
+  // Falls back to the street map if the satellite style does not load.
+  Timer? _styleTimeout;
+
   /// Shipment the driver asked to see from a task card. While set, the
   /// camera stays on it instead of jumping back to the driver's GPS.
   TaskItem? _focusedTask;
@@ -1434,6 +1441,7 @@ class _MapPageState extends State<_MapPage> {
     _loadCorrections();
     _loadMapContactData();
     _loadLocalStatuses();
+    _loadMapStyle();
     if (widget.active) {
       _startLiveLocation();
     } else {
@@ -1472,9 +1480,44 @@ class _MapPageState extends State<_MapPage> {
     LocationCorrectionService.changes.removeListener(_onCorrectionChanged);
     MapFocusService.requests.removeListener(_onMapFocusRequest);
     _headingNotifier.dispose();
+    _styleTimeout?.cancel();
     _positionSubscription?.cancel();
     _compassSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadMapStyle() async {
+    final satellite = await DriverPreferencesStore.instance.readSatelliteMap();
+    if (!mounted || !satellite || _satellite) return;
+    _setSatellite(true, remember: false);
+  }
+
+  void _setSatellite(bool on, {bool remember = true}) {
+    setState(() => _satellite = on);
+    if (remember) {
+      unawaited(DriverPreferencesStore.instance.saveSatelliteMap(on));
+    }
+    final controller = _mapController;
+    if (!_mapReady || controller == null) return;
+    controller.setStyle(on ? MapConfig.satelliteStyle : MapConfig.streetStyle);
+    _watchStyleLoad();
+  }
+
+  /// The satellite view needs the MapTiler key and more data; if it has not
+  /// loaded within 15s the street map comes back, so the map is never
+  /// left empty.
+  void _watchStyleLoad() {
+    _styleTimeout?.cancel();
+    if (!_satellite) return;
+    _styleTimeout = Timer(const Duration(seconds: 15), () {
+      if (!mounted || !_satellite) return;
+      _setSatellite(false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تعذر تحميل صورة القمر الصناعي، رجعت الخريطة العادية.'),
+        ),
+      );
+    });
   }
 
   Future<void> _startLiveLocation() async {
@@ -2363,7 +2406,9 @@ class _MapPageState extends State<_MapPage> {
                 },
                 child: ml.MapLibreMap(
                   options: ml.MapOptions(
-                    initStyle: 'https://tiles.openfreemap.org/styles/liberty',
+                    initStyle: _satellite
+                        ? MapConfig.satelliteStyle
+                        : MapConfig.streetStyle,
                     initCenter: initialCenter,
                     initZoom: _currentPosition != null ? 16.3 : 11,
                     initPitch: 45,
@@ -2376,6 +2421,7 @@ class _MapPageState extends State<_MapPage> {
                   onMapCreated: (controller) {
                     _mapController = controller;
                     _mapReady = true;
+                    _watchStyleLoad();
                     if (_focusedTask != null) {
                       _applyFocus();
                     } else if (_currentPosition != null) {
@@ -2390,6 +2436,9 @@ class _MapPageState extends State<_MapPage> {
                     }
                   },
                   onEvent: (event) {
+                    if (event is ml.MapEventStyleLoaded) {
+                      _styleTimeout?.cancel();
+                    }
                     if (event is ml.MapEventStartMoveCamera &&
                         event.reason == ml.CameraChangeReason.apiGesture &&
                         _followUser &&
@@ -2480,6 +2529,15 @@ class _MapPageState extends State<_MapPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    FloatingActionButton.small(
+                      heroTag: 'map-style',
+                      onPressed: () => _setSatellite(!_satellite),
+                      tooltip: _satellite ? 'الخريطة العادية' : 'قمر صناعي',
+                      child: Icon(
+                        _satellite ? Icons.map_outlined : Icons.satellite_alt,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
                     FloatingActionButton.small(
                       heroTag: 'fit-all-map',
                       onPressed: located.isEmpty && _currentPosition == null
